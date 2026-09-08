@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meshtastic CLI 测试控制台</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="topbar" aria-label="状态栏">
+      <div>
+        <h1>Meshtastic CLI 测试控制台</h1>
+      </div>
+      <div class="system-state">
+        <span id="healthDot" class="dot pending"></span>
+        <span id="healthText">检查服务</span>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <aside class="panel controls" aria-label="设备连接">
+        <div class="panel-title">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10M7 12h10M7 17h10M4 7h.01M4 12h.01M4 17h.01"/></svg>
+          <h2>设备连接</h2>
+        </div>
+
+        <label class="field">
+          <span>连接方式</span>
+          <select id="connectionType">
+            <option value="none">不连接设备</option>
+            <option value="port">串口</option>
+            <option value="host">TCP</option>
+            <option value="ble">BLE</option>
+          </select>
+        </label>
+
+        <div id="serialFields" class="connection-block">
+          <button id="scanPorts" class="secondary" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h5l2-7 4 14 2-7h5"/></svg>
+            扫描串口
+          </button>
+          <div id="portList" class="port-list empty">点击后显示当前 COM 口</div>
+
+          <label class="field">
+            <span>测试设备1串口</span>
+            <select id="primaryPort">
+              <option value="">先扫描后选择</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>测试设备2串口</span>
+            <select id="peerPort">
+              <option value="">先扫描后选择</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="hostFields" class="connection-block hidden">
+          <label class="field">
+            <span>测试设备1 TCP</span>
+            <input id="hostValue" placeholder="192.168.1.20">
+          </label>
+          <label class="field">
+            <span>测试设备2 TCP</span>
+            <input id="peerHostValue" placeholder="192.168.1.21">
+          </label>
+        </div>
+
+        <div id="bleFields" class="connection-block hidden">
+          <label class="field">
+            <span>测试设备1 BLE</span>
+            <input id="bleValue" placeholder="设备1 BLE 名称或地址">
+          </label>
+          <label class="field">
+            <span>测试设备2 BLE</span>
+            <input id="peerBleValue" placeholder="设备2 BLE 名称或地址">
+          </label>
+        </div>
+
+        <details class="advanced">
+          <summary>高级参数</summary>
+          <label class="field">
+            <span>目标节点</span>
+            <input id="dest" placeholder="!xxxxxxxx">
+          </label>
+          <label class="field compact">
+            <span>单步超时秒数</span>
+            <input id="timeout" type="number" min="5" max="300" value="60">
+          </label>
+          <label class="field compact">
+            <span>命令间隔秒数</span>
+            <input id="stepGap" type="number" min="0" max="30" value="5">
+          </label>
+        </details>
+
+        <div class="toggle-row">
+          <label class="toggle">
+            <input id="execute" type="checkbox">
+            <span></span>
+            <strong>真实执行</strong>
+          </label>
+
+          <label class="toggle danger">
+            <input id="allowMutating" type="checkbox">
+            <span></span>
+            <strong>允许写配置 / 发消息</strong>
+          </label>
+        </div>
+
+        <button id="runSuite" class="primary" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+          运行测试前检查
+        </button>
+        <button id="runContactExchange" class="secondary contact-action" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+          建立点对点联系人
+        </button>
+
+        <div class="sidecar-log">
+          <div class="sidecar-head">
+            <strong>串口日志旁路</strong>
+            <span id="serialLogState">未启动</span>
+          </div>
+          <label class="field">
+            <span>日志串口</span>
+            <select id="logPort">
+              <option value="">扫描后选择</option>
+            </select>
+          </label>
+          <label class="field compact">
+            <span>波特率</span>
+            <input id="logBaud" type="number" min="1200" max="2000000" value="115200">
+          </label>
+          <div class="inline-actions two">
+            <button id="startSerialLog" class="secondary" type="button">开始监听</button>
+            <button id="stopSerialLog" class="secondary stop" type="button" disabled>停止监听</button>
+          </div>
+          <pre id="serialLogTail" class="serial-tail">旁路监听需要单独的日志串口，不要选择正在被 CLI 使用的测试串口。</pre>
+        </div>
+      </aside>
+
+      <section class="panel modules" aria-label="测试流程">
+        <div class="panel-title split">
+          <div>
+            <h2>测试流程</h2>
+          </div>
+          <span id="caseCount" class="count">0</span>
+        </div>
+
+        <div class="module-actions">
+          <label class="module-select-all">
+            <input id="toggleAllModules" type="checkbox" checked>
+            <span>全选</span>
+          </label>
+          <button id="runSelected" class="secondary" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+            运行选中
+          </button>
+        </div>
+
+        <div id="moduleGrid" class="module-grid"></div>
+
+        <div class="test-actions">
+          <h3>测试项：配置写入</h3>
+          <div class="config-grid">
+            <label class="field">
+              <span>写入目标</span>
+              <select id="configTarget">
+                <option value="primary">测试设备1</option>
+                <option value="peer">测试设备2</option>
+                <option value="both">两台设备</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>配置项</span>
+              <select id="configKind"></select>
+            </label>
+            <label class="field compact">
+              <span>写后等待秒数</span>
+              <input id="configWait" type="number" min="0" max="120" value="10">
+            </label>
+            <div id="configDynamicFields" class="config-dynamic"></div>
+          </div>
+          <div class="inline-actions">
+            <button id="runConfigWrite" class="secondary" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+              下发并检查
+            </button>
+          </div>
+        </div>
+
+        <div class="test-actions">
+          <h3>测试项：通信</h3>
+          <div class="config-grid">
+            <label class="field">
+              <span><input id="useExperimentRegion" type="checkbox"> Region</span>
+              <select id="experimentRegion">
+                <option value="US">US</option>
+                <option value="EU_868">EU_868</option>
+                <option value="CN">CN</option>
+                <option value="JP">JP</option>
+                <option value="ANZ">ANZ</option>
+                <option value="KR">KR</option>
+                <option value="TW">TW</option>
+              </select>
+            </label>
+            <label class="field">
+              <span><input id="useExperimentModem" type="checkbox"> Modem Preset</span>
+              <select id="experimentModem">
+                <option value="LONG_FAST">LONG_FAST</option>
+                <option value="LONG_SLOW">LONG_SLOW</option>
+                <option value="MEDIUM_FAST">MEDIUM_FAST</option>
+                <option value="MEDIUM_SLOW">MEDIUM_SLOW</option>
+                <option value="SHORT_FAST">SHORT_FAST</option>
+                <option value="SHORT_SLOW">SHORT_SLOW</option>
+              </select>
+            </label>
+            <label class="field compact">
+              <span><input id="useOverrideFrequency" type="checkbox"> Frequency Override MHz</span>
+              <input id="overrideFrequency" inputmode="decimal" placeholder="例如 868">
+            </label>
+            <label class="field compact">
+              <span>配置后等待秒数</span>
+              <input id="rebootWait" type="number" min="0" max="120" value="10">
+            </label>
+            <label class="field compact">
+              <span>收信等待秒数</span>
+              <input id="receiveWait" type="number" min="3" max="120" value="10">
+            </label>
+            <label class="field">
+              <span>发送方式</span>
+              <select id="messageMode">
+                <option value="channel">发到频道</option>
+                <option value="device">发给对端设备</option>
+              </select>
+            </label>
+            <label id="messageChannelField" class="field compact">
+              <span>发送频道</span>
+              <select id="messageChannel">
+                <option value="0">频道 0 · LongFast</option>
+                <option value="1">频道 1 · seeed</option>
+                <option value="2">频道 2</option>
+                <option value="3">频道 3</option>
+                <option value="4">频道 4</option>
+                <option value="5">频道 5</option>
+                <option value="6">频道 6</option>
+                <option value="7">频道 7</option>
+              </select>
+            </label>
+            <label class="field wide">
+              <span>双向发送消息</span>
+              <input id="messageText" placeholder="填写一条消息，两台设备互相发送">
+            </label>
+          </div>
+          <div class="inline-actions">
+            <button id="runExperiment" class="primary compact-action" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+              运行通信
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel results" aria-label="测试结果">
+        <div class="panel-title split">
+          <div>
+            <h2>执行结果</h2>
+          </div>
+          <div class="result-toolbar">
+            <button id="stopRun" class="secondary stop" type="button" disabled>停止运行</button>
+            <span id="runState" class="badge idle">待运行</span>
+          </div>
+        </div>
+
+        <div class="metrics">
+          <div data-result-filter="PASS" role="button" tabindex="0"><strong id="passCount">0</strong><span>通过</span></div>
+          <div data-result-filter="FAIL" role="button" tabindex="0"><strong id="failCount">0</strong><span>失败</span></div>
+          <div data-result-filter="SKIPPED" role="button" tabindex="0"><strong id="skipCount">0</strong><span>跳过</span></div>
+          <div data-result-filter="DRY_RUN" role="button" tabindex="0"><strong id="dryCount">0</strong><span>预演</span></div>
+        </div>
+
+        <div class="progress-box">
+          <div class="progress-head">
+            <strong id="progressTitle">暂无运行</strong>
+            <span id="progressNumber">0 / 0</span>
+          </div>
+          <div class="progress-track"><span id="progressBar"></span></div>
+          <div id="progressList" class="progress-list empty">运行后显示步骤</div>
+        </div>
+
+        <div class="snapshot-box">
+          <div class="snapshot-head">
+            <strong>上次读取配置</strong>
+            <span>测试前检查或配置读回后刷新</span>
+          </div>
+          <div id="deviceSnapshotList" class="snapshot-list empty">暂无设备配置</div>
+        </div>
+
+        <div id="resultList" class="result-list empty">暂无结果</div>
+        <button id="clearResults" class="secondary quiet" type="button">清空结果</button>
+      </section>
+    </section>
+
+    <section class="panel evidence" aria-label="命令与报告">
+      <div>
+        <div class="panel-title">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg>
+          <h2>命令与报告内容</h2>
+        </div>
+        <pre id="commandBox">等待执行</pre>
+      </div>
+      <div>
+        <div class="panel-title">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/></svg>
+          <h2>报告记录</h2>
+        </div>
+        <div id="reportList" class="report-list empty">暂无报告</div>
+      </div>
+    </section>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>

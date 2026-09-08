@@ -1,0 +1,276 @@
+{
+  "suite": "Meshtastic CLI \u81ea\u52a8\u5316\u63d0\u6548 Demo",
+  "version": "0.8",
+  "cases": [
+    {
+      "id": "L2-CLI-001",
+      "module": "\u6d4b\u8bd5\u524d\u68c0\u67e5",
+      "source_l2_case": "\u672c\u673a CLI \u73af\u5883\u68c0\u67e5",
+      "objective": "\u786e\u8ba4\u672c\u673a Meshtastic CLI \u5df2\u5b89\u88c5\uff0c\u5e76\u80fd\u88ab\u81ea\u52a8\u5316\u6267\u884c\u5668\u8c03\u7528\u3002",
+      "test_data": "\u4e0d\u9700\u8981\u8fde\u63a5\u8bbe\u5907\u3002",
+      "pass_meaning": "PASS \u53ea\u8bc1\u660e\u672c\u673a CLI \u53ef\u6267\u884c\uff0c\u4e0d\u4ee3\u8868\u8bbe\u5907\u8fde\u63a5\u6216\u901a\u4fe1\u529f\u80fd\u901a\u8fc7\u3002",
+      "failure_help": "\u68c0\u67e5\u9879\u76ee .venv \u6216\u7cfb\u7edf PATH \u4e2d\u662f\u5426\u5b58\u5728 meshtastic CLI\u3002",
+      "risk": "read_only",
+      "steps": [
+        {
+          "name": "\u8bfb\u53d6 CLI \u7248\u672c",
+          "command": [
+            "--version"
+          ],
+          "requires_connection": false,
+          "mutating": false,
+          "pass_criteria": "CLI \u8fd4\u56de\u7248\u672c\u53f7\u6216 meshtastic \u5173\u952e\u5b57\u3002",
+          "expect_stdout_regex": [
+            "\\d+\\.\\d+|meshtastic"
+          ],
+          "action_summary": "\u68c0\u67e5\u672c\u673a meshtastic \u547d\u4ee4\u662f\u5426\u53ef\u8c03\u7528"
+        }
+      ]
+    },
+    {
+      "id": "L2-CLI-002",
+      "module": "\u6d4b\u8bd5\u524d\u68c0\u67e5",
+      "source_l2_case": "\u53cc\u8bbe\u5907\u8eab\u4efd / \u901a\u4fe1\u5173\u952e\u914d\u7f6e / NodeDB \u53ef\u89c1\u6027",
+      "objective": "\u4e00\u6b21\u5b8c\u6210\u4e24\u53f0\u6d4b\u8bd5\u8bbe\u5907\u7684\u8eab\u4efd\u3001\u901a\u4fe1\u5173\u952e\u914d\u7f6e\u548c NodeDB \u5bf9\u7aef\u53ef\u89c1\u6027\u68c0\u67e5\u3002",
+      "test_data": "\u9700\u8981\u6d4b\u8bd5\u8bbe\u59071\u4e32\u53e3\u548c\u6d4b\u8bd5\u8bbe\u59072\u4e32\u53e3\uff1b\u4e24\u4e2a COM \u53e3\u4e0d\u80fd\u76f8\u540c\u3002",
+      "pass_meaning": "PASS \u8868\u793a\u4e24\u53f0\u8bbe\u5907\u53ef\u88ab CLI \u63a7\u5236\uff0c\u4e14\u8282\u70b9\u5217\u8868\u80fd\u770b\u5230\u5bf9\u7aef\uff1bNodeDB \u53ef\u89c1\u53ea\u8bc1\u660e\u53d1\u73b0\u8fc7\u8282\u70b9\uff0c\u4e0d\u7b49\u4ef7\u4e8e\u70b9\u5bf9\u70b9\u6d88\u606f ACK\u3002\u82e5 CLI \u8f93\u51fa\u5305\u542b publicKey\uff0c\u62a5\u544a\u4f1a\u5c55\u793a\u8282\u70b9\u516c\u94a5\u3002",
+      "failure_help": "\u5982\u679c NodeDB \u6ca1\u770b\u5230\u5bf9\u7aef\uff0c\u5148\u786e\u8ba4\u4e24\u53f0\u8bbe\u5907 region\u3001channel/PSK\u3001modem preset\u3001frequency override \u4e00\u81f4\uff1b\u70b9\u5bf9\u70b9\u8054\u7cfb\u4eba\u5efa\u7acb\u8bf7\u8fd0\u884c\u5de6\u4fa7\u201c\u5efa\u7acb\u70b9\u5bf9\u70b9\u8054\u7cfb\u4eba\u201d\u3002",
+      "risk": "read_only",
+      "steps": [
+        {
+          "name": "\u8bfb\u53d6\u6d4b\u8bd5\u8bbe\u59071\u8eab\u4efd",
+          "target": "primary",
+          "command": [
+            "--no-nodes",
+            "--info"
+          ],
+          "requires_connection": true,
+          "mutating": false,
+          "capture_node_id_as": "primary_node_id",
+          "pass_criteria": "CLI \u53ef\u8bfb\u53d6\u8bbe\u5907\u8282\u70b9 ID \u548c\u8bbe\u5907\u540d\uff1b\u4e0d\u8bfb\u53d6\u79c1\u94a5\u3002\u516c\u94a5\u4ece\u540e\u7eed NodeDB \u8f93\u51fa\u4e2d\u63d0\u53d6\u5c55\u793a\u3002",
+          "expect_stdout_regex": [
+            "Connected to radio"
+          ],
+          "expect_stdout_regex_any": [
+            "myNodeNum|firmwareVersion|hwModel|Owner"
+          ],
+          "action_summary": "\u786e\u8ba4\u6d4b\u8bd5\u8bbe\u59071 COM \u53e3\u5bf9\u5e94\u7684 Meshtastic \u8282\u70b9\u8eab\u4efd"
+        },
+        {
+          "name": "\u8bfb\u53d6\u6d4b\u8bd5\u8bbe\u59072\u8eab\u4efd",
+          "target": "peer",
+          "command": [
+            "--no-nodes",
+            "--info"
+          ],
+          "requires_connection": true,
+          "requires_peer": true,
+          "mutating": false,
+          "capture_node_id_as": "peer_node_id",
+          "pass_criteria": "CLI \u53ef\u8bfb\u53d6\u8bbe\u5907\u8282\u70b9 ID \u548c\u8bbe\u5907\u540d\uff1b\u4e0d\u8bfb\u53d6\u79c1\u94a5\u3002\u516c\u94a5\u4ece\u540e\u7eed NodeDB \u8f93\u51fa\u4e2d\u63d0\u53d6\u5c55\u793a\u3002",
+          "expect_stdout_regex": [
+            "Connected to radio"
+          ],
+          "expect_stdout_regex_any": [
+            "myNodeNum|firmwareVersion|hwModel|Owner"
+          ],
+          "action_summary": "\u786e\u8ba4\u6d4b\u8bd5\u8bbe\u59072 COM \u53e3\u5bf9\u5e94\u7684 Meshtastic \u8282\u70b9\u8eab\u4efd"
+        },
+        {
+          "name": "\u8bfb\u53d6\u6d4b\u8bd5\u8bbe\u59071\u5173\u952e\u914d\u7f6e",
+          "target": "primary",
+          "command": [
+            "--get",
+            "lora.region",
+            "--get",
+            "lora.modem_preset",
+            "--get",
+            "lora.override_frequency",
+            "--get",
+            "device.role"
+          ],
+          "requires_connection": true,
+          "mutating": false,
+          "readback_fields": [
+            "lora.region",
+            "lora.modem_preset",
+            "lora.override_frequency",
+            "device.role"
+          ],
+          "pass_criteria": "\u6d4b\u8bd5\u8bbe\u59071\u53ef\u6279\u91cf\u8bfb\u53d6 Region\u3001Modem Preset\u3001Frequency Override \u548c Device Role\u3002",
+          "expect_stdout_regex_any": [
+            "lora.region|region|US|EU_868|CN|JP|ANZ|KR|TW|RU|IN",
+            "lora.modem_preset|modem|LONG|SHORT|MEDIUM|PRESET",
+            "lora.override_frequency|override_frequency|frequency|Connected|\\d+",
+            "device.role|role|CLIENT|TRACKER|ROUTER|MUTE"
+          ],
+          "action_summary": "\u6279\u91cf\u8bfb\u53d6\u6d4b\u8bd5\u8bbe\u59071\u901a\u4fe1\u5173\u952e\u914d\u7f6e"
+        },
+        {
+          "name": "\u8bfb\u53d6\u6d4b\u8bd5\u8bbe\u59072\u5173\u952e\u914d\u7f6e",
+          "target": "peer",
+          "command": [
+            "--get",
+            "lora.region",
+            "--get",
+            "lora.modem_preset",
+            "--get",
+            "lora.override_frequency",
+            "--get",
+            "device.role"
+          ],
+          "requires_connection": true,
+          "requires_peer": true,
+          "mutating": false,
+          "readback_fields": [
+            "lora.region",
+            "lora.modem_preset",
+            "lora.override_frequency",
+            "device.role"
+          ],
+          "pass_criteria": "\u6d4b\u8bd5\u8bbe\u59072\u53ef\u6279\u91cf\u8bfb\u53d6 Region\u3001Modem Preset\u3001Frequency Override \u548c Device Role\u3002",
+          "expect_stdout_regex_any": [
+            "lora.region|region|US|EU_868|CN|JP|ANZ|KR|TW|RU|IN",
+            "lora.modem_preset|modem|LONG|SHORT|MEDIUM|PRESET",
+            "lora.override_frequency|override_frequency|frequency|Connected|\\d+",
+            "device.role|role|CLIENT|TRACKER|ROUTER|MUTE"
+          ],
+          "action_summary": "\u6279\u91cf\u8bfb\u53d6\u6d4b\u8bd5\u8bbe\u59072\u901a\u4fe1\u5173\u952e\u914d\u7f6e"
+        },
+        {
+          "name": "\u8bfb\u53d6\u6d4b\u8bd5\u8bbe\u59071\u9891\u90530",
+          "target": "primary",
+          "command": [
+            "--ch-index",
+            "0",
+            "--info"
+          ],
+          "requires_connection": true,
+          "mutating": false,
+          "sensitive_output": true,
+          "pass_criteria": "\u6d4b\u8bd5\u8bbe\u59071\u53ef\u8bfb\u53d6\u9891\u9053 0 \u4fe1\u606f\uff1b\u9875\u9762\u9690\u85cf\u53ef\u80fd\u5305\u542b\u7684 PSK/URL\u3002",
+          "expect_stdout_regex_any": [
+            "Channel|channels|name|psk|url|Complete|Connected"
+          ],
+          "action_summary": "\u8bfb\u53d6\u6d4b\u8bd5\u8bbe\u59071\u9891\u9053 0 \u5feb\u7167"
+        },
+        {
+          "name": "\u8bfb\u53d6\u6d4b\u8bd5\u8bbe\u59072\u9891\u90530",
+          "target": "peer",
+          "command": [
+            "--ch-index",
+            "0",
+            "--info"
+          ],
+          "requires_connection": true,
+          "requires_peer": true,
+          "mutating": false,
+          "sensitive_output": true,
+          "pass_criteria": "\u6d4b\u8bd5\u8bbe\u59072\u53ef\u8bfb\u53d6\u9891\u9053 0 \u4fe1\u606f\uff1b\u9875\u9762\u9690\u85cf\u53ef\u80fd\u5305\u542b\u7684 PSK/URL\u3002",
+          "expect_stdout_regex_any": [
+            "Channel|channels|name|psk|url|Complete|Connected"
+          ],
+          "action_summary": "\u8bfb\u53d6\u6d4b\u8bd5\u8bbe\u59072\u9891\u9053 0 \u5feb\u7167"
+        },
+        {
+          "name": "\u6d4b\u8bd5\u8bbe\u59071\u8282\u70b9\u5217\u8868\u5305\u542b\u6d4b\u8bd5\u8bbe\u59072",
+          "target": "primary",
+          "command": [
+            "--info"
+          ],
+          "requires_connection": true,
+          "requires_peer": true,
+          "expect_node_from": "peer_node_id",
+          "mutating": false,
+          "pass_criteria": "\u6d4b\u8bd5\u8bbe\u59071\u8282\u70b9\u5217\u8868\u4e2d\u51fa\u73b0\u6d4b\u8bd5\u8bbe\u59072\u8282\u70b9 ID\uff1b\u8fd9\u53ea\u8bc1\u660e\u8282\u70b9\u53ef\u89c1\uff0c\u4e0d\u7b49\u4ef7\u4e8e\u70b9\u5bf9\u70b9 ACK\u3002 \u5982\u679c CLI \u8f93\u51fa\u5305\u542b publicKey\uff0c\u9875\u9762\u4f1a\u63d0\u53d6\u5e76\u663e\u793a\u5bf9\u5e94\u8282\u70b9\u516c\u94a5\u3002 \u00e5\u008e\u009f\u00e5\u00a7\u008b\u00e9\u0085\u008d\u00e7\u00bd\u00ae\u00e8\u00be\u0093\u00e5\u0087\u00ba\u00e4\u00bc\u009a\u00e8\u0084\u00b1\u00e6\u0095\u008f\u00ef\u00bc\u008c\u00e9\u00a1\u00b5\u00e9\u009d\u00a2\u00e5\u008f\u00aa\u00e5\u00b1\u0095\u00e7\u00a4\u00ba\u00e8\u008a\u0082\u00e7\u0082\u00b9\u00e5\u0085\u00ac\u00e9\u0092\u00a5\u00e7\u00ad\u0089\u00e7\u00bb\u0093\u00e6\u009e\u0084\u00e5\u008c\u0096\u00e8\u00af\u0081\u00e6\u008d\u00ae\u00e3\u0080\u0082",
+          "expect_stdout_regex": [
+            "Connected to radio"
+          ],
+          "expect_stdout_regex_any": [
+            "Nodes in mesh|publicKey|public_key|Connected"
+          ],
+          "action_summary": "\u7528\u6d4b\u8bd5\u8bbe\u59071 NodeDB \u9a8c\u8bc1\u6d4b\u8bd5\u8bbe\u59072\u662f\u5426\u53ef\u89c1",
+          "sensitive_output": true
+        },
+        {
+          "name": "\u6d4b\u8bd5\u8bbe\u59072\u8282\u70b9\u5217\u8868\u5305\u542b\u6d4b\u8bd5\u8bbe\u59071",
+          "target": "peer",
+          "command": [
+            "--info"
+          ],
+          "requires_connection": true,
+          "requires_peer": true,
+          "expect_node_from": "primary_node_id",
+          "mutating": false,
+          "pass_criteria": "\u6d4b\u8bd5\u8bbe\u59072\u8282\u70b9\u5217\u8868\u4e2d\u51fa\u73b0\u6d4b\u8bd5\u8bbe\u59071\u8282\u70b9 ID\uff1b\u8fd9\u53ea\u8bc1\u660e\u8282\u70b9\u53ef\u89c1\uff0c\u4e0d\u7b49\u4ef7\u4e8e\u70b9\u5bf9\u70b9 ACK\u3002 \u5982\u679c CLI \u8f93\u51fa\u5305\u542b publicKey\uff0c\u9875\u9762\u4f1a\u63d0\u53d6\u5e76\u663e\u793a\u5bf9\u5e94\u8282\u70b9\u516c\u94a5\u3002 \u00e5\u008e\u009f\u00e5\u00a7\u008b\u00e9\u0085\u008d\u00e7\u00bd\u00ae\u00e8\u00be\u0093\u00e5\u0087\u00ba\u00e4\u00bc\u009a\u00e8\u0084\u00b1\u00e6\u0095\u008f\u00ef\u00bc\u008c\u00e9\u00a1\u00b5\u00e9\u009d\u00a2\u00e5\u008f\u00aa\u00e5\u00b1\u0095\u00e7\u00a4\u00ba\u00e8\u008a\u0082\u00e7\u0082\u00b9\u00e5\u0085\u00ac\u00e9\u0092\u00a5\u00e7\u00ad\u0089\u00e7\u00bb\u0093\u00e6\u009e\u0084\u00e5\u008c\u0096\u00e8\u00af\u0081\u00e6\u008d\u00ae\u00e3\u0080\u0082",
+          "expect_stdout_regex": [
+            "Connected to radio"
+          ],
+          "expect_stdout_regex_any": [
+            "Nodes in mesh|publicKey|public_key|Connected"
+          ],
+          "action_summary": "\u7528\u6d4b\u8bd5\u8bbe\u59072 NodeDB \u9a8c\u8bc1\u6d4b\u8bd5\u8bbe\u59071\u662f\u5426\u53ef\u89c1",
+          "sensitive_output": true
+        }
+      ]
+    },
+    {
+      "id": "L2-CLI-004",
+      "module": "\u53ef\u9009\u53d6\u8bc1",
+      "source_l2_case": "\u914d\u7f6e\u9879\u53ef\u8bfb\u6027 / \u5b57\u6bb5\u540d\u786e\u8ba4",
+      "objective": "\u5217\u51fa\u5f53\u524d CLI/\u56fa\u4ef6\u652f\u6301\u7684\u914d\u7f6e\u5b57\u6bb5\uff0c\u7528\u4e8e\u786e\u8ba4\u53ef\u5199\u914d\u7f6e\u9879\u7684\u51c6\u786e\u5b57\u6bb5\u540d\u3002",
+      "test_data": "\u9700\u8981\u6d4b\u8bd5\u8bbe\u59071\u8fde\u63a5\u3002",
+      "pass_meaning": "PASS \u8868\u793a CLI \u8fd4\u56de\u914d\u7f6e\u5b57\u6bb5\u6e05\u5355\uff1b\u5b83\u7528\u4e8e\u7ef4\u62a4\u81ea\u52a8\u5316\u811a\u672c\uff0c\u4e0d\u662f\u4e1a\u52a1\u529f\u80fd\u901a\u8fc7\u3002",
+      "failure_help": "\u5982\u679c\u5931\u8d25\uff0c\u68c0\u67e5 meshtastic CLI \u53c2\u6570\u517c\u5bb9\u6027\uff0c\u6216\u8fd0\u884c meshtastic --help\u3002",
+      "risk": "read_only",
+      "steps": [
+        {
+          "name": "\u8bfb\u53d6\u53ef\u914d\u7f6e\u5b57\u6bb5",
+          "target": "primary",
+          "command": [
+            "--get",
+            "0"
+          ],
+          "requires_connection": true,
+          "mutating": false,
+          "pass_criteria": "\u8f93\u51fa\u5305\u542b device\u3001lora\u3001network\u3001position \u7b49\u914d\u7f6e\u5206\u7ec4\u3002",
+          "expect_stdout_regex": [
+            "device:",
+            "lora:"
+          ],
+          "expect_stdout_regex_any": [
+            "network:|position:|mqtt:|bluetooth:"
+          ],
+          "action_summary": "\u8bfb\u53d6\u5f53\u524d\u56fa\u4ef6\u652f\u6301\u7684\u914d\u7f6e\u5b57\u6bb5\u6e05\u5355"
+        }
+      ]
+    },
+    {
+      "id": "L2-CLI-005",
+      "module": "\u53ef\u9009\u53d6\u8bc1",
+      "source_l2_case": "\u914d\u7f6e\u5feb\u7167 / \u56de\u5f52\u524d\u540e\u5bf9\u6bd4",
+      "objective": "\u5bfc\u51fa\u8bbe\u5907\u5b8c\u6574\u914d\u7f6e\uff0c\u4f5c\u4e3a\u6d4b\u8bd5\u524d\u540e\u5bf9\u6bd4\u548c\u5931\u8d25\u590d\u76d8\u8bc1\u636e\u3002",
+      "test_data": "\u9700\u8981\u6d4b\u8bd5\u8bbe\u59071\u8fde\u63a5\u3002\u5b8c\u6574\u914d\u7f6e\u53ef\u80fd\u5305\u542b\u9891\u9053\u3001\u7f51\u7edc\u6216\u5b89\u5168\u76f8\u5173\u5b57\u6bb5\u3002",
+      "pass_meaning": "PASS \u8868\u793a\u914d\u7f6e\u5bfc\u51fa\u5b8c\u6210\u5e76\u51fa\u73b0\u914d\u7f6e\u5b57\u6bb5\uff1b\u4e0d\u4ee3\u8868\u914d\u7f6e\u503c\u90fd\u7b26\u5408\u9700\u6c42\u3002",
+      "failure_help": "\u5982\u679c timeout\uff0c\u53ef\u5355\u72ec\u8fd0\u884c\u5e76\u628a\u5355\u6b65\u8d85\u65f6\u8c03\u5230 120 \u79d2\u3002",
+      "risk": "read_only",
+      "steps": [
+        {
+          "name": "\u5bfc\u51fa\u6d4b\u8bd5\u8bbe\u59071\u914d\u7f6e",
+          "target": "primary",
+          "command": [
+            "--export-config"
+          ],
+          "requires_connection": true,
+          "mutating": false,
+          "sensitive_output": true,
+          "pass_criteria": "\u5bfc\u51fa\u547d\u4ee4\u8fd4\u56de 0\uff0c\u8f93\u51fa\u5305\u542b\u914d\u7f6e\u5b57\u6bb5\uff1b\u654f\u611f\u5b57\u6bb5\u5728\u62a5\u544a\u91cc\u9690\u85cf\u3002",
+          "expect_stdout_regex_any": [
+            "owner|channel|lora|device|config|module_config"
+          ],
+          "action_summary": "\u5bfc\u51fa\u6d4b\u8bd5\u8bbe\u59071\u5b8c\u6574\u914d\u7f6e\u5feb\u7167"
+        }
+      ]
+    }
+  ]
+}
