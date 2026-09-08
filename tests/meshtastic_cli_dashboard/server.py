@@ -105,14 +105,8 @@ def extract_usb_serial(text):
 
 
 def extract_usb_instance(text):
-    text = text or ""
-    # PNP instance IDs are useful in logs, but too noisy for the operator-facing
-    # scan list. Keep the raw value in hwid and show a plain serial-device label.
-    if re.search(r"USB\\VID_", text, flags=re.IGNORECASE):
-        return ""
-    match = re.search(r"\bLOCATION=([^\s]+)", text, flags=re.IGNORECASE)
-    if match:
-        return "USB位置 " + match.group(1).strip()
+    # Windows PNP instance IDs such as 6&1BE3522E&0&0000 are not stable enough
+    # for tester-facing device identity. Keep them in hwid only.
     return ""
 
 

@@ -295,7 +295,6 @@ function snapshotRows(snapshot) {
   const preferences = snapshot.preferences || {};
   const modules = snapshot.module_preferences || {};
   const summary = snapshot.summary || {};
-  const nodeKeyRows = nodePublicKeyLines(snapshot.node_public_keys);
   return [
     ['Short Name', summary.short_name],
     ['\u8282\u70b9 ID', summary.node_id],
@@ -313,7 +312,6 @@ function snapshotRows(snapshot) {
     ['Bluetooth', configValue(preferences, 'bluetooth.enabled')],
     ['GPS', configValue(preferences, 'position.gpsEnabled')],
     ['MQTT', configValue(modules, 'mqtt.enabled')],
-    ['NodeDB \u516c\u94a5', nodeKeyRows.join('\n')],
   ].filter(([, value]) => value !== '' && value !== undefined && value !== null);
 }
 
@@ -517,7 +515,8 @@ function friendlyReason(step) {
   if (step.status === 'SKIPPED') return reasonLabels[step.reason] || step.reason || '\u6b65\u9aa4\u5df2\u8df3\u8fc7\u3002';
   if (step.status === 'PASS') {
     if (step.api_dual_send && step.sent_messages?.length) return '\u901a\u8fc7\uff1a\u4e24\u53f0\u8bbe\u5907\u90fd\u5df2\u53d1\u9001\u6d88\u606f\uff0c\u4e14\u53cc\u65b9\u76d1\u542c\u65e5\u5fd7\u90fd\u770b\u5230\u5bf9\u7aef\u6d88\u606f\u3002';
-    if (step.node_public_keys?.length) return `\u901a\u8fc7\uff1a\u5df2\u8bfb\u53d6 ${step.node_public_keys.length} \u4e2a\u8282\u70b9\u516c\u94a5\u3002`;
+    if (step.info_summary?.public_key) return '\u901a\u8fc7\uff1a\u5df2\u8bfb\u53d6\u672c\u8bbe\u5907\u516c\u94a5\u3002';
+    if (step.node_public_keys?.length) return '\u901a\u8fc7\uff1a\u5df2\u8bfb\u53d6 NodeDB \u53ef\u89c1\u6027\u8bc1\u636e\u3002';
     if (step.read_values?.length) return `\u901a\u8fc7\uff1a\u5df2\u8bfb\u53d6 ${step.read_values.map((item) => `${item.display_field || item.field} = ${item.display_value || item.value}`).join('\uff0c')}`;
     if (step.read_value) return `\u901a\u8fc7\uff1a\u5df2\u8bfb\u53d6 ${step.read_value.display_field || step.read_value.field} = ${step.read_value.display_value || step.read_value.value}`;
     if (step.direction && step.message && step.received_message) return `\u901a\u8fc7\uff1a${displayText(step.direction)} \u5df2\u53d1\u9001\u201c${step.message}\u201d\uff0c\u63a5\u6536\u7aef\u76d1\u542c\u5230\u8be5\u6d88\u606f\u3002`;
@@ -577,7 +576,6 @@ function evidenceText(step, reportPath) {
   }
   if (step.receive_wait != null) chunks.push(`\u63a5\u6536\u7b49\u5f85\uff1a ${step.receive_wait}s`);
   if (step.captured_node_id) chunks.push(`\u8282\u70b9 ID\uff1a ${step.captured_node_id}`);
-  if (step.node_public_keys?.length) chunks.push(`NodeDB \u516c\u94a5\uff1a\n${step.node_public_keys.map((item) => `${item.short_name || shortNodeLabel(item.node_id) || item.node_id}: ${item.public_key}`).join('\n')}`);
   if (step.contact_url) chunks.push(`\u8054\u7cfb\u4eba URL\uff1a ${step.contact_url}`);
   if (step.read_values?.length) chunks.push(`\u8bfb\u53d6\u503c\uff1a\n${step.read_values.map((item) => `${item.display_field || item.field} = ${item.display_value || item.value}`).join('\n')}`);
   if (!step.read_values?.length && step.read_value) chunks.push(`\u8bfb\u53d6\u503c\uff1a ${step.read_value.display_field || step.read_value.field} = ${step.read_value.display_value || step.read_value.value}`);
@@ -749,8 +747,8 @@ function renderPorts() {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = item.likelyDevice ? 'port-chip likely' : 'port-chip';
-    const deviceId = item.deviceId || item.usbSerial || '\u65e0 USB ID';
-    button.innerHTML = `<strong>${escapeHtml(item.port)}</strong><span>${escapeHtml(deviceId)}</span><small>${escapeHtml(item.name || item.manufacturer || '\u4e32\u53e3\u8bbe\u5907')}</small>`;
+    const deviceText = item.usbSerial ? `USB SN ${item.usbSerial}` : (item.name || item.manufacturer || '\u4e32\u53e3\u8bbe\u5907');
+    button.innerHTML = `<strong>${escapeHtml(item.port)}</strong><span>${escapeHtml(deviceText)}</span><small>\u70b9\u51fb\u5206\u914d\u5230\u6d4b\u8bd5\u8bbe\u5907</small>`;
     button.addEventListener('click', () => {
       $('connectionType').value = 'port';
       showConnectionFields();

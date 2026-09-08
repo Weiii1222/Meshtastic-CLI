@@ -258,19 +258,16 @@ def parse_info_summary(output):
     if owner_match:
         summary["long_name"] = owner_match.group("long").strip()
         summary["short_name"] = owner_match.group("short").strip()
-    public_key = extract_value([
-        r'"publicKey"\s*:\s*"([^"]+)"',
-        r'"public_key"\s*:\s*"([^"]+)"',
-        r"publicKey\s*[:=]\s*([^\r\n,]+)",
-        r"public_key\s*[:=]\s*([^\r\n,]+)",
-        r"Public\s+Key\s*[:=]\s*([^\r\n,]+)",
-    ], output)
-    if public_key:
-        summary["public_key"] = public_key.strip().strip('"')
-    if not summary.get("public_key") and node_id:
+    if node_id:
         local_public_key = public_key_for_node(output, node_id)
         if local_public_key:
             summary["public_key"] = local_public_key
+    if not summary.get("public_key"):
+        public_key = extract_value([
+            r"Public\s+Key\s*[:=]\s*([^\r\n,]+)",
+        ], output)
+        if public_key:
+            summary["public_key"] = public_key.strip().strip('"')
     field_patterns = {
         "firmware": [r'"firmwareVersion"\s*:\s*"([^"]+)"', r"firmwareVersion\s*[:=]\s*([^\r\n,]+)"],
         "hardware": [r'"hwModel"\s*:\s*"([^"]+)"', r"hwModel\s*[:=]\s*([^\r\n,]+)"],
@@ -542,12 +539,15 @@ def run_command(command, timeout):
 def is_transient_port_error(raw):
     combined = f"{raw.get('stdout') or ''}\n{raw.get('stderr') or ''}".lower()
     markers = (
+        "connection timed out",
         "could not open port",
+        "serial device couldn't be opened",
         "access is denied",
         "permissionerror",
         "filenotfounderror",
-        "绯荤粺鎵句笉鍒版寚瀹氱殑鏂囦欢",
-        "鎷掔粷璁块棶",
+        "cannot configure port",
+        "\u7cfb\u7edf\u627e\u4e0d\u5230\u6307\u5b9a\u7684\u6587\u4ef6",
+        "\u62d2\u7edd\u8bbf\u95ee",
     )
     return raw.get("exit_code") != 0 and any(marker in combined for marker in markers)
 
