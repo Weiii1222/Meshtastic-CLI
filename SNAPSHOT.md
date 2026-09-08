@@ -941,3 +941,17 @@ pid=33228
 - `L2-CLI-002` no longer requires `publicKey` from `--no-nodes --info`. Identity steps read node ID/name only; NodeDB visibility steps now use `--info` with sensitive output hidden so public keys can be extracted from `Nodes in mesh` when the CLI provides them.
 - `runner.py` now extracts structured `node_public_keys` from `Nodes in mesh` JSON and can display entries such as node `242a` when present. Private keys remain out of scope and are not read or displayed.
 - Verification was static/dry-run only per user instruction: JS syntax, Python compile, JSON parse, dry-run precheck generation, and historical `242a` public-key parser check passed. No real serial command, write, or send was executed in this update.
+
+## 32. 2026-09-08 GitHub Push and Device Display Tightening
+
+- Git remote was changed to `https://github.com/Weiii1222/Meshtastic-CLI.git`; local history was merged with the GitHub initialization commit and pushed successfully to `main`.
+- Serial scan cards now show `COMx` plus a plain serial-device label or real USB serial number only. Windows PNP instance fragments such as `6&1BE3522E&0&0000` stay out of the operator UI.
+- Device configuration panel now displays only the connected device's own public key from the local `--info` / `myNodeNum` match. NodeDB public-key lists are no longer rendered in the device snapshot or step evidence.
+- `parse_info_summary()` now prefers the public key for the local node ID before considering generic `Public Key` text, preventing another NodeDB entry from being shown as the current device's key.
+- Non-mutating read commands now treat Meshtastic `Connection timed out` as a transient serial/protocol failure and retry with the existing bounded retry path. Mutating writes and send-message commands still avoid automatic retry to prevent duplicate side effects.
+- Latest user-observed `读取测试设备1身份` failure matched CLI protocol timeout evidence: Windows enumerated the COM port, but Meshtastic CLI did not complete the device handshake before timeout. This is distinct from "serial port not found" or "port occupied".
+
+Verification:
+- Static checks only: dashboard JS syntax passed, Python compile passed, JSON cases parse passed, `git diff --check` passed.
+- Historical log parsing confirmed local public-key selection on node `!76ade504` / short name `e504`.
+- No real serial command, write, or message send was executed in this update.
