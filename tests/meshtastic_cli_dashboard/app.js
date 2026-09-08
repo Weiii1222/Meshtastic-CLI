@@ -1174,7 +1174,7 @@ async function runExistingPayload(payload, label, visible = true) {
     setRunning(false);
     return data;
   } catch (error) {
-    $('runState').textContent = '寮傚父';
+    $('runState').textContent = '\u5f02\u5e38';
     $('runState').className = 'badge error';
     $('commandBox').textContent = error.message;
     setRunning(false);
