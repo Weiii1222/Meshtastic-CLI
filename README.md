@@ -3,6 +3,8 @@
 > **界面名称**：Mesh 固件测试控制台　|　**仓库**：Meshtastic-CLI
 >
 > 把 Meshtastic 固件的测试项，从「人工在设备上逐项操作、手工记录」搬到本地可视化平台：串口与蓝牙两种连接、一键执行、自动留证、结论可追溯。
+>
+> **基于官方 Meshtastic 生态开发**：设备交互全部走 **官方 meshtastic Python CLI**（`meshtastic` 2.7.11，官方 meshtastic/python 仓库），配置字段与枚举对照 **官方 protobufs**，固件行为结论对照 **官方固件源码**；平台不自己实现 Mesh 协议。
 
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4)
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
@@ -18,6 +20,7 @@
 - [这是什么](#这是什么)
 - [背景：从人工操作到自动化测试项](#背景从人工操作到自动化测试项)
 - [支持范围](#支持范围)
+- [基于官方生态开发（重要）](#基于官方生态开发重要)
 - [功能总览](#功能总览)
 - [串口连接能力](#串口连接能力)
 - [蓝牙（BLE）连接能力](#蓝牙ble连接能力)
@@ -74,6 +77,22 @@
 | 连接方式 | **串口**：已支持，支持被测 / 对端 / 观察者三台协同<br>**BLE**：已支持，单台设备即可跑设备侧配置验证 |
 | 设备 | 支持 Meshtastic 固件的设备。示例：**Wio Tracker L2**（ESP32-S3 + SX1262）、以及其它可被 `meshtastic` CLI / BLE 识别的 Meshtastic 节点 |
 | 运行环境 | Windows 10/11 + Python 3.10+（后端仅用标准库，前端无构建步骤） |
+
+---
+
+## 基于官方生态开发（重要）
+
+平台**不自研协议、不魔改官方包**：所有设备交互都通过官方组件完成，判据语义对照官方定义。这样写的好处是可信（不依赖自研实现）、可跟随升级（官方 CLI 升级即可同步能力）、可复用（其它 Meshtastic 设备同样适用）。
+
+| 官方组件 | 版本 / 来源 | 平台如何使用 |
+| --- | --- | --- |
+| **官方 Meshtastic Python CLI** | `meshtastic` **2.7.11**（[meshtastic/python](https://github.com/meshtastic/python)） | 设备交互的**唯一执行入口**：串口与 `--ble` 两条通道都由它完成；平台不直接实现 Mesh 协议 |
+| **官方 protobuf 定义** | [meshtastic/protobufs](https://github.com/meshtastic/protobufs) | 配置字段、角色 / 区域 / 时区枚举与判据语义的对照来源 |
+| **官方固件源码** | [meshtastic/firmware](https://github.com/meshtastic/firmware) | 固件行为结论的依据（默认值、深睡逻辑、周期上报等） |
+| pyserial | 3.5（官方 CLI 依赖） | 串口枚举与 USB 详情展示 |
+| Bleak | 3.0.2（官方 CLI 依赖） | BLE 连接，由官方 CLI 的 BLE 接口驱动 |
+
+**唯一的一层本地包装**：`safe_meshtastic_cli.py` 仍然调用官方 CLI 入口（`meshtastic.__main__`），只在进程内调整串口打开方式（让 DTR/RTS 不触发 Windows USB-CDC 上的 ESP32 复位）以及可选的 BLE 配对参数 —— **不改协议行为、不改动 site-packages**。
 
 ---
 
@@ -148,7 +167,7 @@ server.py（本机 http.server，127.0.0.1:8765，提供 API + 静态文件）
         │ 子进程
 runner.py（测试项执行引擎：读语料、跑步骤、判期望、出报告）
         │
-safe_meshtastic_cli.py（CLI 包装：关闭 DTR 复位）→ meshtastic CLI（串口 / BLE）
+safe_meshtastic_cli.py（CLI 包装：关闭 DTR 复位）→ 官方 meshtastic CLI 2.7.11（串口 / --ble）
 ```
 
 ```text
@@ -181,7 +200,7 @@ safe_meshtastic_cli.py（CLI 包装：关闭 DTR 复位）→ meshtastic CLI（�
 git clone https://github.com/Weiii1222/Meshtastic-CLI.git
 cd Meshtastic-CLI
 
-# 1) 建虚拟环境并安装 CLI（CLI 仅作为平台的执行入口）
+# 1) 安装官方 meshtastic CLI（平台的唯一设备交互入口，当前 2.7.11）
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install meshtastic

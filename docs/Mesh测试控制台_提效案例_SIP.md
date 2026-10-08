@@ -9,6 +9,8 @@
 
 Mesh 固件测试提效：把人工设备操作验证沉淀成 79 步自动化测试项，单轮人力投入从 1 小时降到分钟级
 
+**一句话说明（建议放在正文开头）**：本平台**基于官方 Meshtastic 生态开发** —— 设备交互全部通过**官方 meshtastic Python CLI（`meshtastic` 2.7.11，官方 meshtastic/python 开源仓库）**执行，配置字段与枚举对照**官方 protobufs**，固件行为结论对照**官方固件源码**；平台不自己实现 Mesh 协议，也不改动官方包。**CLI 是平台的执行能力，不是原来的测试流程**（原来是纯人工设备操作）。
+
 ---
 
 ## 提议背景
@@ -52,7 +54,10 @@ Mesh 固件的验证原来是**纯人工测试模式**：人在设备上按键�
 **4. 把失败变成可定位的结论**
 控制台不只是"跑通/跑不通"，它把现象归因到具体行为：例如角色用例失败时能指出「TRACKER 发完位置后会按 `position_broadcast_secs`（固件默认 3600 秒）深睡，睡眠期间 USB-CDC 与射频一起断电，串口会从系统里消失」，并给出「唤醒设备后重跑 / 确认端口号是否变化」的处理建议；同时纠正了一处**用例设计缺陷**（原先断言"写入 60 秒再读回 60 秒"，实际固件回落默认值 3600，属于把错误预期当判据），避免后续继续产出无意义的失败单。
 
-**5. 零依赖、一键启动、团队可复制**
+**5. 基于官方生态开发，可信、可跟随升级、可复用**
+不做自研协议、不魔改官方包：设备交互全部走**官方 meshtastic Python CLI（2.7.11）**的串口与 `--ble` 两条通道；配置字段与角色 / 区域 / 时区枚举对照**官方 protobufs**；固件行为结论（默认值、深睡逻辑、周期上报）对照**官方固件源码**。唯一的一层本地包装 `safe_meshtastic_cli.py` 仍然调用官方 CLI 入口，只在进程内调整串口打开方式（避免 Windows USB-CDC 上读命令触发设备复位），不改协议行为、不改动 site-packages。**官方 CLI 升级即可同步能力，换其它 Meshtastic 设备同样适用。**
+
+**6. 零依赖、一键启动、团队可复制**
 后端只用 Python 标准库，前端是原生 HTML/CSS/JS，无构建步骤、不占服务器：`.\start_dashboard.ps1` 一条命令起服务，浏览器打开 `127.0.0.1:8765` 即用。报告目录可用环境变量指向共享路径，多人跑的结果能汇总到一处。
 
 ---
@@ -68,8 +73,10 @@ server.py（本地 http.server，127.0.0.1:8765，提供 API + 静态文件）
         │ 子进程
 runner.py（用例执行引擎：读语料、跑步骤、判期望、出报告）
         │
-safe_meshtastic_cli.py（CLI 包装：关闭 DTR 复位）→ meshtastic.exe（官方 CLI，串口 / --ble）
+safe_meshtastic_cli.py（CLI 包装：关闭 DTR 复位）→ 官方 meshtastic CLI 2.7.11（串口 / --ble）
 ```
+
+> 说明：整套实现**基于官方 Meshtastic 生态**——执行入口是官方 meshtastic Python CLI，字段与枚举语义对照官方 protobufs，固件行为结论对照官方固件源码；平台侧不含任何自研协议实现。
 
 **关键设计**
 
@@ -107,3 +114,4 @@ safe_meshtastic_cli.py（CLI 包装：关闭 DTR 复位）→ meshtastic.exe（�
 - 「约 5 分钟」口径：勾选用例 + 点击 + 核对报告与失败原因的人工时间；设备等待（重启、广播周期）不占用人力。
 - TRACKER 深睡结论来源：固件 `PositionModule.cpp` 中 `doDeepSleep(position_broadcast_secs)` 与「Sending position and sleeping for %us interval in a moment」日志；默认值来自 `Default.h` 的 `default_broadcast_interval_secs = 3600`。
 - `2147483647` 结论来源：`Default.h` 中 `#define MAX_INTERVAL INT32_MAX`（注释说明为避免 Apple 客户端溢出），语义为「不做周期性上报」。
+- 官方依赖口径：执行入口为**官方 `meshtastic` Python CLI 2.7.11**（`pip install meshtastic`，官方 meshtastic/python 仓库），串口/BLE 均走它的既有接口；本地唯一包装 `safe_meshtastic_cli.py` 只调整串口打开时的 DTR/RTS 与可选 BLE 配对，未改协议行为、未改 site-packages。
