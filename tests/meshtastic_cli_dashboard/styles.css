@@ -1402,10 +1402,16 @@ select:disabled + .custom-select .custom-select-button {
   gap: 2px;
 }
 
+/* 「设备当前配置」：两台设备固定左右并排，禁止 auto-fit 折行堆叠；
+   只有一台设备时（蓝牙单设备）卡片横跨整行，避免出现半宽空位。 */
 .snapshot-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(360px, 760px));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.snapshot-list > .snapshot-card:only-child {
+  grid-column: 1 / -1;
 }
 
 .snapshot-list.empty {
@@ -1424,6 +1430,8 @@ select:disabled + .custom-select .custom-select-button {
   max-width: 820px;
   max-height: 420px;
   overflow: auto;
+  /* 允许卡片被压窄（内容里长字符串换行），否则会撑破半宽轨道 */
+  min-width: 0;
 }
 
 .snapshot-card header {
