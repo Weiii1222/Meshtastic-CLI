@@ -1673,3 +1673,13 @@ P2（需要多台设备或专用环境）
 - **SIP 提效案例落到 `docs/Mesh测试控制台_提效案例_SIP.md`**：按平台字段写全「标题 / 提议背景 / 频率描述 / 亮点 / 解决方案」，数据全部取自仓库事实（9 条用例 / 79 步 / 4 模块 / 2 种连接方式，19 步写操作、7 个监听窗口，BLE 时区用例 26 步 = 7 写 + 7 重启读回），并在文末附「数据口径与来源」注明哪些是实测、哪些是按步骤估算（≥1 小时基线的换算方式），发布前可自行替换。
 - **README 重写（高星开源项目风格）**：背景与目标（含痛点表）、功能特性表、架构图与目录树、快速开始、使用指南八步、配置（启动/环境变量/可写配置项/运行参数）、用例语料格式与字段表、覆盖范围表（9 条用例逐条列出模块/连接/设备数/步骤）、设计约定（默认安全、不制造假 PASS、先读后写、失败可定位、CLI DTR 包装）、注意事项六条（TRACKER 深睡与串口消失、`2147483647` = MAX_INTERVAL、BLE 单设备无法验证时钟、PSK 前置条件、写后等待、报告脱敏）、故障排查表、开发与验证、路线图、许可说明。删掉了原来写死的本机绝对路径。
 - **仓库同步**：`.gitignore` 补 `.playwright-cli/`；把之前未入库的 `tests/meshtastic_cli_demo/safe_meshtastic_cli.py`、`tests/meshcore_demo/runner.py`、控制台原型需求文档一并入库。三个提交：`e7723f8`（控制台/MeshCore/DTR 包装与语料）、`d9394d1`（README + SIP 案例）、`1fe2511`（设计与工作记录），已 `git push origin main`，远端 main = `1fe2511`，raw README 已可访问。
+
+### 39. 页面标题去产品名 + 设备卡片固定并排 + 文档平台化与「基于官方生态」+ AI 应用案例提案
+
+- **页面标题去产品名**：浏览器标题与侧边栏品牌统一为「Mesh 固件测试控制台」（去掉 Wio Tracker L2），实测 `document.title` 与 `#appTitle` 一致、0 pageerror。
+- **「设备当前配置」两卡固定左右并排**：`.snapshot-list` 由 `repeat(auto-fit, minmax(360px,760px))` 改为 `repeat(2, minmax(0,1fr))`，`.snapshot-card` 补 `min-width: 0`，单卡时 `grid-column: 1/-1` 横跨整行。实测 1440/1280/1150/1024 及默认宽度下两卡同 y、x 递增（并排），无横向溢出；单设备时卡宽 = 整行宽度。`tmp/verify_snapshot_pair.js` 常驻回归。
+- **README 平台化重写**：H1 改为「Meshtastic 固件自动化测试平台」，去掉单一产品指向（设备写成「支持 Meshtastic 固件的设备，示例 Wio Tracker L2」）；MeshCore 从「已支持」降级为「界面入口已预留、能力暂未支持、纳入规划」（含路线图与架构树标注）；**纠正背景**——此前是纯人工设备操作模式，CLI 是平台能力而非原流程；串口与 BLE 各自独立成节、等比篇幅（串口：批量配置、一键建立联系人、日志查看、空口监听、测试项可补充；BLE：扫描连接与配对、配置读写与重启读回、单设备 BLE 测试项、持续收发与实时日志、适用边界）。
+- **新增「基于官方生态开发（重要）」章节**（README + 两份提案）：官方 meshtastic Python CLI 2.7.11（官方 meshtastic/python）为唯一设备交互入口（串口 / `--ble`）；字段与枚举对照官方 protobufs；固件行为结论对照官方 firmware；pyserial 3.5 / Bleak 3.0.2 为官方 CLI 依赖；唯一本地包装 `safe_meshtastic_cli.py` 仅调整串口 DTR/RTS 与可选 BLE 配对，不改协议、不改 site-packages。
+- **新增 `docs/AI应用案例提案_Mesh固件测试控制台.md`**：面向 HR 审核，含 300 字摘要、案例一句话、提案背景、技术基础（官方生态表）、AI 与人分工表、可量化成果、AI 应用边界与规范、可复制性与推广建议、后续计划。
+- **SIP 提效案例同步**：标题与背景改为「人工设备操作 → 自动化测试项」，补「基于官方生态开发」亮点与架构说明，成效表按「人工操作 / 平台执行」对照，附数据口径补官方依赖版本。
+- **仓库命名**：评估结论为需要改名（原名 `Meshtastic-CLI` 易被误认为官方 CLI）。已选定 **`meshtastic-test-platform`**，README 内三处引用（仓库名、clone 地址、`cd` 目录）已按新名写好；GitHub 侧需在仓库 Settings → Repository name 改名（旧地址会自动重定向），本地 remote 待改名完成后切换。

@@ -1,6 +1,6 @@
 # Meshtastic 固件自动化测试平台
 
-> **界面名称**：Mesh 固件测试控制台　|　**仓库**：Meshtastic-CLI
+> **界面名称**：Mesh 固件测试控制台　|　**仓库**：meshtastic-test-platform
 >
 > 把 Meshtastic 固件的测试项，从「人工在设备上逐项操作、手工记录」搬到本地可视化平台：串口与蓝牙两种连接、一键执行、自动留证、结论可追溯。
 >
@@ -197,8 +197,8 @@ safe_meshtastic_cli.py（CLI 包装：关闭 DTR 复位）→ 官方 meshtastic 
 **运行环境**：Windows 10/11、Python 3.10+、已装 USB 串口驱动（只用 BLE 时可不装）；测试设备建议 2 台，跑转发类角色测试项需要 3 台（第三台为观察者，可选）。
 
 ```powershell
-git clone https://github.com/Weiii1222/Meshtastic-CLI.git
-cd Meshtastic-CLI
+git clone https://github.com/Weiii1222/meshtastic-test-platform.git
+cd meshtastic-test-platform
 
 # 1) 安装官方 meshtastic CLI（平台的唯一设备交互入口，当前 2.7.11）
 python -m venv .venv
