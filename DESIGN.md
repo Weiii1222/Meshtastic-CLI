@@ -95,7 +95,7 @@ The interface is a compact operating surface for repeated hardware validation. I
 **Key Characteristics:**
 - Dense but organized panels for frequent use.
 - Manual serial scanning before port assignment, so stale COM values do not look fixed.
-- Port options show only the COM number; scanned cards show USB device ID or USB location for physical mapping. TCP/BLE use two explicit address/name inputs for test device 1 and test device 2.
+- Port options show only the COM number; scanned cards show COM number plus a concise USB serial number or plain device label. TCP uses explicit host inputs. BLE scan uses browser-native Web Bluetooth device selection, then an explicit Connect BLE action validates GATT/service availability before the backend runner reconnects by BLE name/address.
 - Module rows support a single select-all checkbox, multi-module runs, and individual case runs.
 - Results accumulate until cleared, preserving earlier module output for comparison.
 - Configuration writes are user-entered and explicitly gated before they can change a device.
@@ -107,6 +107,7 @@ The interface is a compact operating surface for repeated hardware validation. I
 - Device references start as test device 1 and test device 2. After `--info` succeeds, selectors and result evidence prefer the local Owner Short Name; fallback is the local `myNodeNum` node-ID suffix without `#`. NodeDB rows, relay nodes, and destination IDs must never rename a connected device. COM port remains visible only in port mapping/evidence and is never appended to the device name.
 - Channel labels come only from explicit channel reads/writes for that index. The default primary channel is shown as `LongFast`; a secondary `seeed` channel is shown at index 1 until the device reports or writes another name. Do not use arbitrary NodeDB `name` fields as channel labels.
 - The device configuration panel is a last-read snapshot. It refreshes after precheck, `--info`, or configuration readback; it is not a live real-time device settings stream.
+- A fixed narrow left navigation rail keeps the three pages visible without hover expansion. Serial scanning belongs in device connection, reports belong on the Report page, and the serial sidecar log belongs on the Log page.
 - A separate serial sidecar log can listen to a non-test COM port and write raw text logs for diagnosis. It is outside testcase verdict logic and cannot select the same COM as either test device.
 - Results show one verdict card per testcase. Read/write/wait substeps stay inside the expandable evidence block, and the PASS/FAIL/SKIP/DRY metric cards filter the visible testcase cards.
 - Running jobs expose step progress and a stop button so long CLI calls, listen windows, and reboot waits do not look frozen.
@@ -146,7 +147,7 @@ The palette pairs neutral lab surfaces with restrained operational status colors
 
 ## Layout
 
-The primary viewport uses a three-column operating layout: device connection and safety gates on the left, precheck and test actions in the center, cumulative results on the right. Command evidence and report history sit in a full-width lower band. At medium widths results span the row; on mobile every panel stacks into one column.
+The primary viewport uses a fixed narrow navigation rail plus a bounded operating canvas. Device connection and the current configuration snapshot lead the page, followed by a responsive multi-column grid for test modules, configuration write, and communication validation. Cumulative results and command evidence sit below the main work area. Reports and logs are separate pages. On mobile the navigation becomes a compact top rail and every panel stacks into one column.
 
 ## Components
 
@@ -155,11 +156,12 @@ The primary viewport uses a three-column operating layout: device connection and
 - **Module Run:** Green action button for one-case, one-module, selected-module, and full-suite runs.
 - **Quiet Secondary:** White/gray utility button for clearing results and low-risk tools.
 - **Select All:** Use one checkbox in the module toolbar; avoid separate all-select and all-clear buttons.
+- **Run Mode:** The top bar exposes only read-only real-device mode and writable real-device mode. Communication and configuration writes require writable mode.
 - **Focus:** 3px translucent green focus ring with 2px offset.
 
 ### Port Chips
 - **Style:** Clickable compact rows with COM number first and USB device ID second.
-- **Device Mapping:** Prefer USB serial number. If the chip has no serial number, show USB instance or USB location so the tester can map the current physical connection.
+- **Device Mapping:** Prefer USB serial number. If the chip has no serial number, show a plain serial-device label rather than noisy Windows instance fragments.
 - **Role Assignment:** Test device 1 and test device 2 selects share the same scanned port list; a selected port is disabled in the opposite selector.
 
 ### Result Rows
@@ -178,11 +180,12 @@ The primary viewport uses a three-column operating layout: device connection and
 
 ### Reports
 - **Location:** Persist JSON reports and progress JSONL under `E:\Brower-Download\seeed\Project_01_WioTrackerL2\logs` by default; teams may redirect with `MESHTASTIC_DASHBOARD_LOG_DIR`.
+- **Placement:** Report history lives on the Report page, with report details rendered in a dedicated evidence panel.
 - **Actions:** Report rows open JSON inside the command/report panel or download a local JSON file.
 
-### Optional Evidence
+### Advanced Evidence
 - **Purpose:** Field-list and full-config export tools support field confirmation and failure replay; they are not core business tests.
-- **Default State:** Optional evidence modules are not selected by default because full config export can be slow and may time out during reboot windows.
+- **Default State:** Advanced evidence modules are not selected by default because full config export can be slow and may time out during reboot windows.
 
 ## Do's and Don'ts
 
