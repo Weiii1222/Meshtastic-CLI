@@ -1,9 +1,5 @@
 # Meshtastic 固件自动化测试平台
-
-> **界面名称**：Mesh 固件测试控制台　|　**仓库**：meshtastic-test-platform
->
 > 把 Meshtastic 固件的测试项，从「人工在设备上逐项操作、手工记录」搬到本地可视化平台：串口与蓝牙两种连接、一键执行、自动留证、结论可追溯。
->
 > **基于官方 Meshtastic 生态开发**：设备交互全部走 **官方 meshtastic Python CLI**（`meshtastic` 2.7.11，官方 meshtastic/python 仓库），配置字段与枚举对照 **官方 protobufs**，固件行为结论对照 **官方固件源码**；平台不自己实现 Mesh 协议。
 
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4)
