@@ -1,6 +1,9 @@
 import argparse
+import base64
 import contextlib
+import copy
 import json
+import os
 import re
 import subprocess
 import sys
@@ -13,6 +16,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CASES = Path(__file__).with_name("cases_l2_demo.json")
 LOCAL_MESHTASTIC = PROJECT_ROOT / ".venv" / "Scripts" / "meshtastic.exe"
+LOCAL_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+SAFE_MESHTASTIC_CLI = Path(__file__).with_name("safe_meshtastic_cli.py")
 SENSITIVE_KEYS = ("private_key", "privateKey", "preshared_key", "psk", "wifi_psk", "password", "admin_key", "secret", "complete_url")
 
 DISPLAY_NAMES = {
@@ -22,6 +27,7 @@ DISPLAY_NAMES = {
     "lora.override_frequency": "Frequency Override",
     "lora.channel_num": "Channel Number",
     "device.role": "Device Role",
+    "device.tzdef": "\u65f6\u533a",
     "device.serial_enabled": "Serial",
     "device.double_tap_as_button_press": "Double Tap",
     "device.disable_triple_click": "Triple Click",
@@ -128,6 +134,11 @@ INVERSE_BOOL_FIELDS = {"device.disable_triple_click", "device.led_heartbeat_disa
 
 
 def default_meshtastic_command():
+    # Prefer the wrapper now that build_command pins .py commands to the
+    # project virtualenv. It suppresses DTR/RTS toggles that can reset ESP32
+    # USB-CDC boards when opening a serial port.
+    if SAFE_MESHTASTIC_CLI.exists():
+        return str(SAFE_MESHTASTIC_CLI)
     return str(LOCAL_MESHTASTIC) if LOCAL_MESHTASTIC.exists() else "meshtastic"
 
 
@@ -154,6 +165,13 @@ def build_peer_connection_args(args):
         return ["--host", args.peer_host]
     if args.peer_ble:
         return ["--ble", args.peer_ble]
+    return []
+
+
+def build_observer_connection_args(args):
+    """测试设备3（观察者）：只支持串口，因为它要长时间 --listen 抓包。"""
+    if getattr(args, "observer_port", ""):
+        return ["--port", args.observer_port]
     return []
 
 
@@ -204,6 +222,51 @@ def normalize_node_id(value):
     return clean if re.fullmatch(r"![0-9a-f]{8}", clean) else ""
 
 
+def normalize_packet_node_id(value):
+    """Normalize packet node fields from Meshtastic events to !xxxxxxxx."""
+    if value is None:
+        return ""
+    if isinstance(value, int):
+        return f"!{value:08x}"
+    text = str(value).strip().lower()
+    if not text:
+        return ""
+    if text.isdigit():
+        return f"!{int(text):08x}"
+    return normalize_node_id(text)
+
+
+def interface_node_id(interface):
+    """Read this interface's node id without running another CLI command."""
+    my_info = getattr(interface, "myInfo", None)
+    for attr in ("my_node_num", "myNodeNum", "node_num", "nodeNum"):
+        value = getattr(my_info, attr, None)
+        node_id = normalize_packet_node_id(value)
+        if node_id:
+            return node_id
+    return ""
+
+
+def wait_for_interface_node_id(interface, timeout=8):
+    """Wait until Meshtastic Python API has populated this interface's node id."""
+    deadline = time.monotonic() + max(0, float(timeout or 0))
+    while time.monotonic() < deadline:
+        node_id = interface_node_id(interface)
+        if node_id:
+            return node_id
+        time.sleep(0.2)
+    return interface_node_id(interface)
+
+
+def packet_id_value(packet):
+    """Return a Meshtastic packet id from protobuf-like or dict packets."""
+    if packet is None:
+        return ""
+    if isinstance(packet, dict):
+        return str(packet.get("id", "") or "")
+    return str(getattr(packet, "id", "") or "")
+
+
 def parse_node_public_keys(output):
     nodes = json_block_after("Nodes in mesh:", output)
     if not isinstance(nodes, dict) or not nodes:
@@ -236,6 +299,52 @@ def public_key_for_node(output, node_id):
         if item.get("node_id") == normalized:
             return item.get("public_key") or ""
     return ""
+
+
+def decode_public_key(value):
+    """Decode Meshtastic base64 public keys from CLI/NodeDB output."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.startswith("base64:"):
+        text = text.split(":", 1)[1]
+    try:
+        return base64.b64decode(text, validate=True)
+    except Exception:
+        return None
+
+
+def interface_public_key_for_node(interface, node_id):
+    """Read a peer public key from the Python API NodeDB cache."""
+    normalized = normalize_node_id(node_id)
+    if not normalized:
+        return ""
+    candidates = []
+    nodes = getattr(interface, "nodes", None) or {}
+    if isinstance(nodes, dict):
+        candidates.extend([
+            nodes.get(normalized),
+            nodes.get(normalized.lstrip("!")),
+            nodes.get(normalized.upper()),
+        ])
+    node_num = int(normalized[-8:], 16)
+    nodes_by_num = getattr(interface, "nodesByNum", None) or {}
+    if isinstance(nodes_by_num, dict):
+        candidates.extend([nodes_by_num.get(node_num), nodes_by_num.get(str(node_num))])
+    for node in candidates:
+        if not isinstance(node, dict):
+            continue
+        user = node.get("user") if isinstance(node.get("user"), dict) else {}
+        public_key = user.get("publicKey") or user.get("public_key") or node.get("publicKey") or node.get("public_key")
+        if public_key:
+            return str(public_key).strip()
+    return ""
+
+
+def known_public_key_for_node(interface, node_id, fallback_public_key=""):
+    """Prefer a caller-provided key, then fall back to the interface NodeDB."""
+    fallback = str(fallback_public_key or "").strip()
+    return fallback or interface_public_key_for_node(interface, node_id)
 
 
 def extract_value(patterns, output):
@@ -501,6 +610,23 @@ def short_node_label(node_id):
     return compact[-4:].lower() if len(compact) >= 4 else ""
 
 
+def context_target_label(target, context):
+    if target == "primary":
+        return context.get("primary_short_name") or short_node_label(context.get("primary_node_id")) or "测试设备1"
+    if target == "peer":
+        return context.get("peer_short_name") or short_node_label(context.get("peer_node_id")) or "测试设备2"
+    if target == "observer":
+        return context.get("observer_short_name") or short_node_label(context.get("observer_node_id")) or "测试设备3"
+    if target == "listener":
+        # 监听端是"观察者优先、没有观察者就退回设备2"，实际用了哪一台在记录 listen_diagnostics 时解析。
+        return "监听端"
+    if target == "both":
+        return "两台设备"
+    if target == "all":
+        return "三台设备"
+    return target or "-"
+
+
 def change_group_key(target, subject):
     return f"change:{target}:{subject}"
 
@@ -525,15 +651,105 @@ def replace_device_names(value, primary_label, peer_label):
         return {key: replace_device_names(item, primary, peer) for key, item in value.items()}
     return value
 
-def run_command(command, timeout):
+def _kill_process_tree(process):
+    """Kill the command and its children.
+
+    Windows 上 .venv\\Scripts\\meshtastic.exe 是启动器，会再拉起一个 python 子进程；
+    只 kill 启动器会留下孤儿 python 继续占着 COM 口，下一步就会报 could not open port。
+    """
+    if os.name == "nt":
+        with contextlib.suppress(Exception):
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                capture_output=True,
+                check=False,
+            )
+    with contextlib.suppress(Exception):
+        process.kill()
+
+
+def _drain_stream(stream, sink):
+    """Read a child pipe line by line so a timeout still keeps the partial output."""
+    try:
+        for line in stream:
+            sink.append(line)
+    except Exception:
+        pass
+    finally:
+        with contextlib.suppress(Exception):
+            stream.close()
+
+
+def run_command(command, timeout, extra_env=None):
+    """Run one CLI command, keeping whatever the CLI printed before a timeout.
+
+    subprocess.run() throws away all captured output when it kills a timed-out
+    child, which made every slow write op look like a bare handshake failure.
+    Streaming into buffers keeps the evidence ("Connected to radio", "Waiting
+    N seconds before disconnecting", ...) even when we have to kill the process.
+    """
     started = time.monotonic()
-    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False)
+    env = None
+    if extra_env:
+        env = os.environ.copy()
+        env.update({str(key): str(value) for key, value in extra_env.items()})
+    stdout_parts = []
+    stderr_parts = []
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
+    readers = [
+        threading.Thread(target=_drain_stream, args=(process.stdout, stdout_parts), daemon=True),
+        threading.Thread(target=_drain_stream, args=(process.stderr, stderr_parts), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    timed_out = False
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_process_tree(process)
+        with contextlib.suppress(Exception):
+            process.wait(timeout=10)
+    for reader in readers:
+        reader.join(timeout=5)
+    stdout = "".join(stdout_parts)
+    stderr = "".join(stderr_parts)
+    duration_sec = round(time.monotonic() - started, 2)
+    if timed_out:
+        stderr = f"{stderr}\ncommand_timeout_after_{timeout}s".strip()
+        return {
+            "exit_code": 124,
+            "stdout": stdout,
+            "stderr": stderr,
+            "duration_sec": duration_sec,
+            "partial_output": True,
+        }
     return {
-        "exit_code": completed.returncode,
-        "stdout": completed.stdout,
-        "stderr": completed.stderr,
-        "duration_sec": round(time.monotonic() - started, 2),
+        "exit_code": process.returncode,
+        "stdout": stdout,
+        "stderr": stderr,
+        "duration_sec": duration_sec,
     }
+
+
+def official_cli_fallback_command(command):
+    """Build an official CLI fallback when the no-reset wrapper cannot handshake."""
+    if not LOCAL_MESHTASTIC.exists():
+        return []
+    parts = [str(part) for part in command]
+    safe_path = str(SAFE_MESHTASTIC_CLI).lower()
+    for index, part in enumerate(parts):
+        if part.lower() == safe_path:
+            return [str(LOCAL_MESHTASTIC)] + parts[index + 1:]
+    return []
 
 
 def is_transient_port_error(raw):
@@ -548,6 +764,14 @@ def is_transient_port_error(raw):
         "cannot configure port",
         "\u7cfb\u7edf\u627e\u4e0d\u5230\u6307\u5b9a\u7684\u6587\u4ef6",
         "\u62d2\u7edd\u8bbf\u95ee",
+        "timed out waiting for connection completion",
+        "timed out waiting for packet",
+        "no response",
+        "reader is dead",
+        "protocol",
+        "handshake",
+        "failed to connect",
+        "command_timeout_after_",
     )
     return raw.get("exit_code") != 0 and any(marker in combined for marker in markers)
 
@@ -562,25 +786,227 @@ def is_connection_unavailable(raw):
         "permissionerror",
         "filenotfounderror",
         "cannot configure port",
+        "timed out waiting for connection completion",
+        "timed out waiting for packet",
+        "no response",
+        "reader is dead",
+        "protocol",
+        "handshake",
+        "failed to connect",
+        "command_timeout_after_",
     )
     return raw.get("exit_code") != 0 and any(marker in combined for marker in markers)
 
 
+PORT_OPEN_FAILURE_MARKERS = (
+    "could not open port",
+    "serial device couldn't be opened",
+    "access is denied",
+    "permissionerror",
+    "filenotfounderror",
+    "cannot configure port",
+    "\u7cfb\u7edf\u627e\u4e0d\u5230\u6307\u5b9a\u7684\u6587\u4ef6",
+    "\u62d2\u7edd\u8bbf\u95ee",
+)
+
+
+def is_port_open_failure(raw):
+    """True only when the port itself could not be opened (device gone / busy)."""
+    combined = f"{raw.get('stdout') or ''}\n{raw.get('stderr') or ''}".lower()
+    return raw.get("exit_code") != 0 and any(marker in combined for marker in PORT_OPEN_FAILURE_MARKERS)
+
+
 def mark_target_unavailable(step_result, context):
     target = step_result.get("target")
-    if target in ("primary", "peer") and is_connection_unavailable(step_result):
+    if target not in ("primary", "peer"):
+        return
+    if step_result.get("mutating") and not is_port_open_failure(step_result):
+        # 写操作超时/输出不符不代表端口不可用：必须让随后的校验步骤继续跑，
+        # 否则「联系人是否真的写进去」永远无法判断（本轮 3354 导入联系人就是这样被跳过的）。
+        return
+    if is_connection_unavailable(step_result):
         context[f"{target}:unavailable"] = True
         step_result["reason"] = "connection_unavailable"
+        if is_port_open_failure(step_result):
+            # 端口直接打不开（系统里可能已经没有这个口）——这跟"设备在但不回话"是两种情况，
+            # 最常见的原因是 TRACKER 类角色深睡时 USB-CDC 会断电、端口从系统里消失。
+            step_result["failure_note"] = (
+                "串口打不开：串口可能已经从系统里消失。常见原因：USB 线松了/设备断电，"
+                "或者设备正在深度睡眠——TRACKER 类角色发完位置后会按 position_broadcast_secs 深睡"
+                "（固件默认 3600 秒），睡眠期间 USB-CDC 与射频一起断电，端口会消失。"
+                "请等设备醒来（按按键唤醒/重新上电）后重跑，或先确认端口号是否变了。"
+            )
 
 
-def run_command_with_retries(command, timeout, attempts=3, delay_sec=5):
+# 本次运行中已确认「只有 DTR 有效时才会回数据」的串口。
+# 例：Wio Tracker L1 Pro 1W 的 USB-CDC 在 DTR 拉低时完全不回数据，no-reset 包装器会一直等到
+# 命令超时（实测包装器 34s 报 Connection timed out，断言 DTR 后 4-9s 握手成功）。
+# 记录后，后续步骤直接用同一个包装器 + DTR 断言重跑，既省时间也避免官方 CLI 的开合复位序列。
+DTR_ASSERT_PORTS: set[str] = set()
+DTR_ASSERT_ENV = {"MESHTASTIC_SERIAL_DTR": "1"}
+
+
+def command_ports(command):
+    ports = set()
+    parts = [str(part) for part in command]
+    for index, part in enumerate(parts):
+        if part in ("--port", "--peer-port") and index + 1 < len(parts):
+            ports.add(parts[index + 1].strip().upper())
+    return ports
+
+
+def command_uses_safe_wrapper(command):
+    safe_path = str(SAFE_MESHTASTIC_CLI).lower()
+    return any(str(part).lower() == safe_path for part in command)
+
+
+def is_handshake_timeout(raw):
+    """整条命令超时 / 串口握手始终没完成：属于确定性失败，重试同一条命令没有意义。"""
+    if int(raw.get("exit_code") or 0) == 124:
+        return True
+    combined = f"{raw.get('stdout') or ''}\n{raw.get('stderr') or ''}".lower()
+    return any(
+        marker in combined
+        for marker in ("command_timeout_after_", "timed out waiting for connection completion", "connection timed out")
+    )
+
+
+def official_cli_result(command, timeout, reason=""):
+    """最后手段：改用官方 meshtastic CLI 跑同一条命令（会自行开合 DTR/RTS，可能触发设备复位）。"""
+    fallback = official_cli_fallback_command(command)
+    if not fallback:
+        return None
+    result = run_command(fallback, timeout)
+    result["fallback_transport"] = "official_meshtastic_cli"
+    result["fallback_from"] = "safe_no_reset_cli"
+    if reason:
+        result["fallback_reason"] = reason
+    return result
+
+
+def dtr_state_path():
+    return PROJECT_ROOT / "logs" / "serial_dtr_ports.json"
+
+
+def load_dtr_ports():
+    """跨进程记住「必须断言 DTR 才能握手」的串口。
+
+    每个用例都是一次全新的 runner 进程，内存里的 DTR_ASSERT_PORTS 会丢，
+    于是每轮第一个步骤都要白等一次必然失败的尝试（实测 COM59 白等约 20s）。
+    """
+    try:
+        data = json.loads(dtr_state_path().read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    ports = data.get("ports") if isinstance(data, dict) else data
+    if not isinstance(ports, list):
+        return set()
+    return {str(port).strip().upper() for port in ports if str(port).strip()}
+
+
+def save_dtr_ports():
+    with contextlib.suppress(Exception):
+        path = dtr_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {"ports": sorted(DTR_ASSERT_PORTS), "updated_at": datetime.now().isoformat(timespec="seconds")},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+
+def remember_dtr_ports(ports):
+    new_ports = {str(port).strip().upper() for port in ports if str(port).strip()}
+    if not new_ports - DTR_ASSERT_PORTS:
+        return
+    DTR_ASSERT_PORTS.update(new_ports)
+    save_dtr_ports()
+
+
+DTR_HANDSHAKE_MARKERS = (
+    # 只认「连接阶段就没握上手」这几句：此时 CLI 还没执行任何写命令，重发不会造成重复写入。
+    "connection timed out",
+    "timed out waiting for connection completion",
+    "failed to connect",
+)
+
+
+def is_dtr_retryable_failure(raw):
+    """只有 CLI 自己报的握手失败才算「可以安全重发」。
+
+    我们主动杀掉的命令（exit 124）不算：那时命令可能已经写进去一半，重复写有风险。
+    端口打不开（could not open port）也不算：那种情况断言 DTR 救不了。
+    """
+    if int(raw.get("exit_code") or 0) == 124:
+        return False
+    combined = f"{raw.get('stdout') or ''}\n{raw.get('stderr') or ''}".lower()
+    if any(marker in combined for marker in PORT_OPEN_FAILURE_MARKERS):
+        return False
+    return any(marker in combined for marker in DTR_HANDSHAKE_MARKERS)
+
+
+def run_with_transport(command, timeout, allow_dtr_retry=True):
+    """按「该串口是否 DTR 依赖」的记忆选择传输方式。
+
+    写操作（配置下发/联系人导入）此前直接调 run_command，绕过了 DTR 记忆，
+    在必须断言 DTR 的 L1 Pro / Mesh Tower 上必然以 Connection timed out 收场
+    （2026-09-29 18:13 那轮的 --add-contact 就是这样失败的）。
+    现在写操作也走这里：已记忆的串口直接带 DTR 断言跑一次；
+    未记忆的串口先按原样跑，只有确认是 CLI 自报的握手失败（命令没真正下发）才带 DTR 重试一次。
+    """
+    use_wrapper = command_uses_safe_wrapper(command)
+    ports = command_ports(command)
+    if use_wrapper and (ports & DTR_ASSERT_PORTS):
+        raw = run_command(command, timeout, extra_env=DTR_ASSERT_ENV)
+        raw["transport_variant"] = "safe_no_reset_cli_dtr_asserted"
+        return raw
+    raw = run_command(command, timeout)
+    if allow_dtr_retry and use_wrapper and is_dtr_retryable_failure(raw):
+        remember_dtr_ports(ports)
+        retry = run_command(command, timeout, extra_env=DTR_ASSERT_ENV)
+        retry["transport_variant"] = "safe_no_reset_cli_dtr_asserted"
+        retry["transport_retry"] = "dtr_asserted_after_handshake_failure"
+        retry["transport_retry_reason"] = (raw.get("stderr") or raw.get("stdout") or "").strip()[-200:]
+        return retry
+    return raw
+
+
+def run_command_with_retries(command, timeout, attempts=2, delay_sec=5, allow_fallback=True):
+    use_wrapper = command_uses_safe_wrapper(command)
+    ports = command_ports(command)
+    # 已知该串口需要 DTR 有效：直接带 MESHTASTIC_SERIAL_DTR=1 跑包装器，省掉一次必然超时的尝试。
+    dtr_env = DTR_ASSERT_ENV if (use_wrapper and (ports & DTR_ASSERT_PORTS)) else None
     last = None
     for attempt in range(1, max(1, attempts) + 1):
-        last = run_command(command, timeout)
+        last = run_command(command, timeout, extra_env=dtr_env)
         last["attempt"] = attempt
-        if not is_transient_port_error(last) or attempt >= attempts:
+        if dtr_env:
+            last["transport_variant"] = "safe_no_reset_cli_dtr_asserted"
+        if not is_transient_port_error(last):
             return last
+        if is_handshake_timeout(last):
+            # 包装器握手整体超时：判定该串口为 DTR 依赖型，立刻用断言 DTR 的同一包装器重试一次。
+            if use_wrapper and not dtr_env:
+                DTR_ASSERT_PORTS.update(ports)
+                save_dtr_ports()
+                retry = run_command(command, timeout, extra_env=DTR_ASSERT_ENV)
+                retry["attempt"] = attempt + 1
+                retry["transport_variant"] = "safe_no_reset_cli_dtr_asserted"
+                if not is_transient_port_error(retry):
+                    return retry
+                last = retry
+            break
+        if attempt < attempts:
+            time.sleep(max(0, delay_sec))
+    if allow_fallback and last and is_transient_port_error(last):
         time.sleep(max(0, delay_sec))
+        fallback_result = official_cli_result(command, timeout, reason="handshake_timeout" if use_wrapper else "")
+        if fallback_result is not None:
+            fallback_result["attempt"] = int(last.get("attempt") or attempts) + 1
+            return fallback_result
     return last or {}
 
 
@@ -593,14 +1019,36 @@ def terminate_process_tree(process):
         process.terminate()
 
 
-def run_listen_send_step(args, sender_connection_args, receiver_connection_args, send_command, message, channel, timeout, receive_wait, send_wait_to_disconnect=0):
-    listen_command = build_command(args.meshtastic, receiver_connection_args, ["--ch-index", str(channel), "--listen"], None, 0)
-    send_full_command = build_command(args.meshtastic, sender_connection_args, send_command, None, send_wait_to_disconnect)
+def command_env_for_ports(command):
+    """包装器命令 + 已知 DTR 依赖串口 → 需要注入的环境变量（否则为 None）。"""
+    if command_uses_safe_wrapper(command) and (command_ports(command) & DTR_ASSERT_PORTS):
+        return dict(DTR_ASSERT_ENV)
+    return None
+
+
+def merged_env(extra_env):
+    env = os.environ.copy()
+    # CLI 的 stdout 走管道时是块缓冲，监听进程被 kill 时缓冲里的 `Received:` 行会丢掉，
+    # 导致"收到了却判定没收到"的假失败。强制不缓冲，让每一行立刻可见。
+    env["PYTHONUNBUFFERED"] = "1"
+    if extra_env:
+        env.update({str(key): str(value) for key, value in extra_env.items()})
+    return env
+
+
+def run_listen_send_step(args, sender_connection_args, receiver_connection_args, send_command, message, channel, timeout, receive_wait, send_wait_to_disconnect=0, dest=""):
+    listen_step_command = ["--listen"] if dest else ["--ch-index", str(channel), "--listen"]
+    listen_command = build_command(args.meshtastic, receiver_connection_args, listen_step_command, None, 0)
+    # 空 send_command = 只监听（用于观察位置包这类设备自发流量，不需要我们主动发消息）。
+    listen_only = not send_command
+    send_full_command = [] if listen_only else build_command(args.meshtastic, sender_connection_args, send_command, dest, send_wait_to_disconnect)
+    send_timeout = max(int(timeout or 30), int(receive_wait or 0) + int(send_wait_to_disconnect or 0) + 45)
     started = time.monotonic()
     listener = None
-    send_result = {"exit_code": 1, "stdout": "", "stderr": "listener did not start"}
+    send_result = {"exit_code": 0 if listen_only else 1, "stdout": "", "stderr": "" if listen_only else "listener did not start"}
     listener_stdout = ""
     listener_stderr = ""
+    listen_ready_wait = max(4.0, min(8.0, float(getattr(args, "step_gap", 0) or 0) or 4.0))
     try:
         listener = subprocess.Popen(
             listen_command,
@@ -609,9 +1057,13 @@ def run_listen_send_step(args, sender_connection_args, receiver_connection_args,
             text=True,
             encoding="utf-8",
             errors="replace",
+            # 接收端同样要走 DTR 断言模式，否则监听进程永远握不上手、静默收不到消息。
+            env=merged_env(command_env_for_ports(listen_command)),
         )
-        time.sleep(1)
-        send_result = run_command(send_full_command, timeout)
+        time.sleep(listen_ready_wait)
+        if not listen_only:
+            # 发送端是 --sendtext：只用已记忆的 DTR 模式，不自动重发（避免重复消息）。
+            send_result = run_with_transport(send_full_command, send_timeout, allow_dtr_retry=False)
         time.sleep(max(0, receive_wait))
     finally:
         if listener:
@@ -621,14 +1073,20 @@ def run_listen_send_step(args, sender_connection_args, receiver_connection_args,
             except subprocess.TimeoutExpired:
                 terminate_process_tree(listener)
                 listener_stdout, listener_stderr = listener.communicate()
-    combined = "\n".join([
-        send_result.get("stdout") or "",
-        send_result.get("stderr") or "",
-        listener_stdout or "",
-        listener_stderr or "",
-    ])
-    received = bool(message and message in combined)
+    send_combined = "\n".join([send_result.get("stdout") or "", send_result.get("stderr") or ""])
+    listener_combined = "\n".join([listener_stdout or "", listener_stderr or ""])
+    combined = "\n".join([send_combined, listener_combined])
+    # Only receiver-side listen output proves delivery. Sender stdout contains
+    # the message text by design ("Sending text message ...") and must not pass.
+    # The CLI --listen path also emits debug/NodeDB logs, so never use a plain
+    # substring check: short texts such as "us" can appear inside "user".
+    received = listener_has_exact_text(listener_combined, message)
     forbidden = bool(re.search(r"NAK|MAX_RETRANSMIT|error reason|No route|timeout", combined, flags=re.IGNORECASE))
+    # 监听端到底有没有握上手：库在收到 my_info/metadata 时会打出来（stdout 或 --debug 的 stderr）。
+    listen_connected = bool(
+        re.search(r"Connected to radio|Received myinfo|my_info \{|metadata \{|Completed getting", listener_combined)
+    )
+    relay_records = parse_listen_relay_records(listener_combined, message)
     return {
         "exit_code": 0 if send_result.get("exit_code") == 0 and received and not forbidden else 1,
         "stdout": send_result.get("stdout") or "",
@@ -637,10 +1095,130 @@ def run_listen_send_step(args, sender_connection_args, receiver_connection_args,
         "listen_command": listen_command,
         "listen_stdout": listener_stdout,
         "listen_stderr": listener_stderr,
+        "listen_connected": listen_connected,
         "receive_wait": receive_wait,
+        "send_timeout": send_timeout,
+        "listen_ready_wait": listen_ready_wait,
         "channel_index": channel,
         "received_message": received,
+        "listen_only": listen_only,
+        "relay_records": relay_records,
+        "portnum_records": parse_listen_portnum_records(listener_combined),
+        "relayed_message_received": any(record.get("relayed") for record in relay_records),
+        "send_command": send_full_command,
     }
+
+
+def parse_listen_portnum_records(output):
+    """记录观察者收到的包类型（portnum），用于位置/遥测等设备自发流量的证据。"""
+    records = []
+    for line in str(output or "").splitlines():
+        if "Received:" not in line and "received:" not in line and "portnum:" not in line:
+            continue
+        match = re.search(r"['\"]portnum['\"]\s*:\s*['\"]?([A-Z_]{3,})['\"]?", line) or re.search(
+            r"portnum:\s*([A-Z_]{3,})", line
+        )
+        portnum = match.group(1) if match else ""
+        if not portnum:
+            for known in ("POSITION_APP", "TELEMETRY_APP", "NODEINFO_APP", "TEXT_MESSAGE_APP", "TRACEROUTE_APP", "ROUTING_APP"):
+                if known in line:
+                    portnum = known
+                    break
+        if portnum:
+            records.append({"portnum": portnum, "line": line.strip()[:400]})
+    return records
+
+
+def parse_listen_protobuf_packets(output, message=""):
+    """解析 CLI `--debug` 的 protobuf 文本格式包（`Received from radio: packet { ... }`）。
+
+    真实串口运行里，库默认的 `Received: {json}` 走 stdout（块缓冲，kill 时可能丢），
+    而 `--debug` 会把每个包以 protobuf 文本格式打到 stderr，字段是 snake_case
+    （hop_limit / hop_start / rx_time / relay_node / portnum / payload）。两种格式都要认，
+    否则真机上"确实中继了"也会被判成没中继（假失败）。
+    """
+    text = str(output or "")
+    records = []
+    for chunk in text.split("packet {")[1:]:
+        block = chunk.split("\n}")[0]
+        if message and not listener_has_exact_text(block, message):
+            continue
+
+        def grab(name):
+            match = re.search(rf"(?m)^\s*{name}:\s*(\d+)\s*$", block)
+            return int(match.group(1)) if match else None
+
+        hop_limit = grab("hop_limit")
+        hop_start = grab("hop_start")
+        portnum_match = re.search(r"(?m)^\s*portnum:\s*([A-Z_]{3,})\s*$", block)
+        payload_match = re.search(r'(?m)^\s*payload:\s*"([^"]*)"\s*$', block)
+        records.append({
+            "id": grab("id"),
+            "from": grab("from"),
+            "relay_node": grab("relay_node"),
+            "hop_limit": hop_limit,
+            "hop_start": hop_start,
+            "rx_time": grab("rx_time"),
+            "relayed": bool(hop_limit is not None and hop_start is not None and hop_start > hop_limit),
+            "portnum": portnum_match.group(1) if portnum_match else "",
+            "payload": payload_match.group(1) if payload_match else "",
+            "format": "protobuf_text",
+            "line": block.strip().replace("\n", " ")[:400],
+        })
+    return records
+
+
+def parse_listen_relay_records(output, message=""):
+    """从 CLI --listen 输出里抽取 hop 信息，用于判断这条消息是否被中继过。
+
+    Meshtastic 每转发一次 hop_limit 减 1（hop_start > hop_limit 即说明被中继），
+    因此即使观察者在同一房间能直连发送方，也能用 hop 差区分"直收"和"被转发"。
+    同时支持库默认的 JSON 行（`Received: {...}`）和 --debug 的 protobuf 文本格式。
+    """
+    records = []
+    for line in str(output or "").splitlines():
+        if "Received:" not in line or "packet {" in line:
+            continue
+        if message and not listener_has_exact_text(line, message):
+            continue
+
+        def grab(name):
+            match = re.search(rf"['\"]{name}['\"]\s*:\s*(\d+)", line)
+            return int(match.group(1)) if match else None
+
+        hop_limit = grab("hopLimit")
+        hop_start = grab("hopStart")
+        records.append({
+            "id": grab("id"),
+            "from": grab("from"),
+            "relay_node": grab("relayNode"),
+            "hop_limit": hop_limit,
+            "hop_start": hop_start,
+            # rxTime = 设备收到该包时用自身时钟打的 UTC 秒（校准设备时间用）。
+            "rx_time": grab("rxTime"),
+            "relayed": bool(hop_limit is not None and hop_start is not None and hop_start > hop_limit),
+            "format": "json",
+            "line": line.strip()[:400],
+        })
+    records.extend(parse_listen_protobuf_packets(output, message))
+    return records
+
+
+def listener_has_exact_text(output, message):
+    """Return true only when listen output contains a decoded text payload."""
+    text = str(message or "")
+    if not text:
+        return False
+    escaped = re.escape(text)
+    patterns = [
+        rf'(?im)^\s*message:\s*["\']?{escaped}["\']?\s*$',
+        rf'(?im)^\s*text:\s*["\']{escaped}["\']\s*$',
+        rf'(?im)["\']text["\']\s*:\s*["\']{escaped}["\']',
+        rf'(?im)decoded[^\r\n]*text[^\r\n]*["\']{escaped}["\']',
+        # --debug 的 protobuf 文本格式：decoded { portnum: TEXT_MESSAGE_APP payload: "标记" }
+        rf'(?im)^\s*payload:\s*["\']{escaped}["\']\s*$',
+    ]
+    return any(re.search(pattern, output or "") for pattern in patterns)
 
 
 def serial_port_from_connection_args(connection_args):
@@ -653,28 +1231,66 @@ def serial_port_from_connection_args(connection_args):
     return str(value or "").strip()
 
 
-def wait_for_received_text(records, lock, target, message, channel, timeout):
+def reset_ack_state(interface):
+    """Reset Meshtastic Python API ACK flags before one directed send."""
+    acknowledgment = getattr(interface, "_acknowledgment", None)
+    if acknowledgment:
+        with contextlib.suppress(Exception):
+            acknowledgment.reset()
+
+
+def wait_for_ack_state(interface, timeout):
+    """Return the first ACK state observed for a directed message."""
+    acknowledgment = getattr(interface, "_acknowledgment", None)
+    if not acknowledgment:
+        return "unavailable"
+    deadline = time.monotonic() + max(0, float(timeout or 0))
+    while time.monotonic() < deadline:
+        if getattr(acknowledgment, "receivedNak", False):
+            reset_ack_state(interface)
+            return "nak"
+        if getattr(acknowledgment, "receivedAck", False):
+            reset_ack_state(interface)
+            return "ack"
+        if getattr(acknowledgment, "receivedImplAck", False):
+            reset_ack_state(interface)
+            return "implicit_ack"
+        time.sleep(0.2)
+    reset_ack_state(interface)
+    return "timeout"
+
+
+def wait_for_received_text(records, lock, target, message, channel, timeout, expected_sender="", expected_recipient="", expected_packet_id=""):
+    expected_sender = normalize_node_id(expected_sender)
+    expected_recipient = normalize_node_id(expected_recipient)
+    expected_packet_id = str(expected_packet_id or "")
+
+    def matched(item):
+        if item.get("target") != target:
+            return False
+        if item.get("text") != message:
+            return False
+        if int(item.get("channel") or 0) != int(channel or 0):
+            return False
+        if expected_sender and item.get("from") != expected_sender:
+            return False
+        if expected_recipient and item.get("to") != expected_recipient:
+            return False
+        if expected_packet_id and str(item.get("id") or "") != expected_packet_id:
+            return False
+        return True
+
     deadline = time.monotonic() + max(0, float(timeout or 0))
     while time.monotonic() < deadline:
         with lock:
-            if any(
-                item.get("target") == target
-                and item.get("text") == message
-                and int(item.get("channel") or 0) == int(channel or 0)
-                for item in records
-            ):
+            if any(matched(item) for item in records):
                 return True
         time.sleep(0.2)
     with lock:
-        return any(
-            item.get("target") == target
-            and item.get("text") == message
-            and int(item.get("channel") or 0) == int(channel or 0)
-            for item in records
-        )
+        return any(matched(item) for item in records)
 
 
-def run_api_dual_send_step(args, primary_connection_args, peer_connection_args, primary_message, peer_message, message_mode, channel, primary_node_id="", peer_node_id=""):
+def run_api_dual_send_step(args, primary_connection_args, peer_connection_args, primary_message, peer_message, message_mode, channel, primary_node_id="", peer_node_id="", primary_public_key="", peer_public_key=""):
     primary_port = serial_port_from_connection_args(primary_connection_args)
     peer_port = serial_port_from_connection_args(peer_connection_args)
     started = time.monotonic()
@@ -695,10 +1311,26 @@ def run_api_dual_send_step(args, primary_connection_args, peer_connection_args, 
     handler = None
     try:
         from pubsub import pub  # type: ignore[import-untyped]
+        from safe_meshtastic_cli import install_serial_no_reset_patch
+
+        install_serial_no_reset_patch()
+        # 进程内 Python API 也会走同一个 no-reset 补丁；串口已知 DTR 依赖时必须让它断言 DTR，
+        # 否则 API 侧会静默连不上（与 CLI 侧 write 步骤同源的问题）。
+        if {str(primary_port).upper(), str(peer_port).upper()} & DTR_ASSERT_PORTS:
+            os.environ.setdefault("MESHTASTIC_SERIAL_DTR", "1")
         from meshtastic.serial_interface import SerialInterface  # type: ignore[import-untyped]
+        from meshtastic.protobuf import portnums_pb2  # type: ignore[import-untyped]
 
         primary_iface = SerialInterface(primary_port, noNodes=True, timeout=max(3, int(args.timeout or 60)))
         peer_iface = SerialInterface(peer_port, noNodes=True, timeout=max(3, int(args.timeout or 60)))
+        receive_timeout = max(3, float(args.receive_wait or 0))
+        ready_timeout = min(10, max(4, receive_timeout))
+        primary_node_id = normalize_node_id(primary_node_id) or wait_for_interface_node_id(primary_iface, ready_timeout)
+        peer_node_id = normalize_node_id(peer_node_id) or wait_for_interface_node_id(peer_iface, ready_timeout)
+        primary_public_key = known_public_key_for_node(peer_iface, primary_node_id, primary_public_key)
+        peer_public_key = known_public_key_for_node(primary_iface, peer_node_id, peer_public_key)
+        primary_public_key_bytes = decode_public_key(primary_public_key)
+        peer_public_key_bytes = decode_public_key(peer_public_key)
 
         def handler(packet, interface):
             decoded = packet.get("decoded") or {}
@@ -708,17 +1340,24 @@ def run_api_dual_send_step(args, primary_connection_args, peer_connection_args, 
             target = "primary" if interface is primary_iface else "peer" if interface is peer_iface else "unknown"
             with lock:
                 records.append({
+                    "id": packet_id_value(packet),
                     "target": target,
                     "text": text,
                     "channel": packet.get("channel", 0),
-                    "from": packet.get("fromId") or packet.get("from"),
-                    "to": packet.get("toId") or packet.get("to"),
+                    "from": normalize_packet_node_id(packet.get("fromId") or packet.get("from")),
+                    "to": normalize_packet_node_id(packet.get("toId") or packet.get("to")),
                 })
 
         pub.subscribe(handler, "meshtastic.receive.text")
-        time.sleep(0.8)
+        subscription_ready_wait = min(3.0, max(1.2, float(getattr(args, "step_gap", 0) or 0) / 2 if getattr(args, "step_gap", 0) else 1.5))
+        time.sleep(subscription_ready_wait)
 
         channel_index = int(channel or 0)
+        primary_ack = "not_required"
+        peer_ack = "not_required"
+        primary_packet_id = ""
+        peer_packet_id = ""
+
         if message_mode == "device":
             if not normalize_node_id(peer_node_id) or not normalize_node_id(primary_node_id):
                 return {
@@ -729,39 +1368,104 @@ def run_api_dual_send_step(args, primary_connection_args, peer_connection_args, 
                     "api_transport": "serial_persistent",
                     "reason": "missing_dest",
                 }
-            primary_iface.sendText(primary_message, destinationId=normalize_node_id(peer_node_id), wantAck=False, channelIndex=channel_index)
+            # Public keys are still collected for evidence, but sendText() lets the firmware
+            # decide the correct visible text-message path from the destination node.
+            reset_ack_state(primary_iface)
+            # Use the official high-level text path for private messages. The
+            # lower-level sendData(pkiEncrypted=True) path can create API-visible
+            # receive events without reliably creating a user-visible chat entry
+            # on some firmware/UI combinations.
+            primary_packet = primary_iface.sendText(
+                primary_message,
+                destinationId=normalize_node_id(peer_node_id),
+                wantAck=True,
+                channelIndex=channel_index,
+                onResponse=primary_iface.getNode(normalize_node_id(peer_node_id), False).onAckNak,
+            )
+            primary_packet_id = packet_id_value(primary_packet)
+            primary_ack = wait_for_ack_state(primary_iface, receive_timeout)
         else:
-            primary_iface.sendText(primary_message, wantAck=False, channelIndex=channel_index)
-        peer_received = wait_for_received_text(records, lock, "peer", primary_message, channel_index, args.receive_wait)
+            primary_packet = primary_iface.sendText(primary_message, wantAck=False, channelIndex=channel_index)
+            primary_packet_id = packet_id_value(primary_packet)
+        peer_received = wait_for_received_text(
+            records,
+            lock,
+            "peer",
+            primary_message,
+            channel_index,
+            args.receive_wait,
+            primary_node_id,
+            peer_node_id if message_mode == "device" else "",
+            "",
+        )
 
         time.sleep(0.5)
         if message_mode == "device":
-            peer_iface.sendText(peer_message, destinationId=normalize_node_id(primary_node_id), wantAck=False, channelIndex=channel_index)
+            reset_ack_state(peer_iface)
+            # Keep the peer direction on the same sendText path so both sides use
+            # firmware-normal text-message handling and not a hand-built payload.
+            peer_packet = peer_iface.sendText(
+                peer_message,
+                destinationId=normalize_node_id(primary_node_id),
+                wantAck=True,
+                channelIndex=channel_index,
+                onResponse=peer_iface.getNode(normalize_node_id(primary_node_id), False).onAckNak,
+            )
+            peer_packet_id = packet_id_value(peer_packet)
+            peer_ack = wait_for_ack_state(peer_iface, receive_timeout)
         else:
-            peer_iface.sendText(peer_message, wantAck=False, channelIndex=channel_index)
-        primary_received = wait_for_received_text(records, lock, "primary", peer_message, channel_index, args.receive_wait)
+            peer_packet = peer_iface.sendText(peer_message, wantAck=False, channelIndex=channel_index)
+            peer_packet_id = packet_id_value(peer_packet)
+        primary_received = wait_for_received_text(
+            records,
+            lock,
+            "primary",
+            peer_message,
+            channel_index,
+            args.receive_wait,
+            peer_node_id,
+            primary_node_id if message_mode == "device" else "",
+            "",
+        )
 
         with lock:
             received_messages = list(records)
+        # Keep both serial API sessions open long enough for the firmware UI and
+        # phone-facing queue to settle. Closing immediately after ACK can make a
+        # successful API receive look like "device did not show the message" on
+        # slower USB-CDC or freshly awakened devices.
+        display_dwell_sec = min(20.0, max(3.0, float(getattr(args, "wait_to_disconnect", 10) or 10)))
+        time.sleep(display_dwell_sec)
+        direct_ack_ok = message_mode != "device" or (primary_ack == "ack" and peer_ack == "ack")
+        received_ok = peer_received and primary_received
         stdout = "\n".join([
             "Persistent Python API serial send",
-            f"{primary_port} -> {peer_port}: {primary_message} received={peer_received}",
-            f"{peer_port} -> {primary_port}: {peer_message} received={primary_received}",
+            f"send_path={'sendText direct' if message_mode == 'device' else 'sendText channel'}",
+            f"{primary_port}({primary_node_id or 'unknown'}) -> {peer_port}({peer_node_id or 'unknown'}): {primary_message} packet={primary_packet_id or '-'} received={peer_received} ack={primary_ack}",
+            f"{peer_port}({peer_node_id or 'unknown'}) -> {primary_port}({primary_node_id or 'unknown'}): {peer_message} packet={peer_packet_id or '-'} received={primary_received} ack={peer_ack}",
         ])
         return {
-            "exit_code": 0 if peer_received and primary_received else 1,
+            "exit_code": 0 if received_ok and direct_ack_ok else 1,
             "stdout": stdout + "\n",
             "stderr": "",
             "duration_sec": round(time.monotonic() - started, 2),
             "api_transport": "serial_persistent",
-            "received_message": peer_received and primary_received,
+            "received_message": received_ok,
             "received_messages": received_messages,
             "sent_messages": [
-                {"from": "primary", "to": "peer" if message_mode == "device" else f"channel:{channel_index}", "message": primary_message, "received": peer_received},
-                {"from": "peer", "to": "primary" if message_mode == "device" else f"channel:{channel_index}", "message": peer_message, "received": primary_received},
+                {"from": "primary", "to": "peer" if message_mode == "device" else f"channel:{channel_index}", "message": primary_message, "received": peer_received, "ack": primary_ack, "packet_id": primary_packet_id},
+                {"from": "peer", "to": "primary" if message_mode == "device" else f"channel:{channel_index}", "message": peer_message, "received": primary_received, "ack": peer_ack, "packet_id": peer_packet_id},
             ],
             "channel_index": channel_index,
-            "reason": "api_dual_received" if peer_received and primary_received else "api_dual_missing_receive",
+            "message_mode": message_mode,
+            "primary_ack": primary_ack,
+            "peer_ack": peer_ack,
+            "primary_public_key_present": bool(primary_public_key_bytes),
+            "peer_public_key_present": bool(peer_public_key_bytes),
+            "ready_timeout": ready_timeout,
+            "subscription_ready_wait": subscription_ready_wait,
+            "display_dwell_sec": display_dwell_sec,
+            "reason": "api_dual_received" if received_ok and direct_ack_ok else "api_dual_missing_ack" if message_mode == "device" and not direct_ack_ok else "api_dual_missing_receive",
         }
     except Exception as exc:  # pylint: disable=broad-except
         return {
@@ -829,6 +1533,9 @@ def parse_contact_url(output):
     return match.group(1).strip() if match else ""
 
 
+RECORDED_TOKEN = re.compile(r"\{recorded:([a-z_]+):([A-Za-z0-9_.]+)\}")
+
+
 def resolve_context_tokens(tokens, context):
     mapping = {
         "$primary_node_id": context.get("primary_node_id") or "$primary_node_id",
@@ -836,16 +1543,44 @@ def resolve_context_tokens(tokens, context):
         "$primary_contact_url": context.get("primary_contact_url") or "$primary_contact_url",
         "$peer_contact_url": context.get("peer_contact_url") or "$peer_contact_url",
     }
-    return [mapping.get(token, token) for token in tokens]
+    resolved = [mapping.get(token, token) for token in tokens]
+    # {recorded:<target>:<field>} = 用前面 --get 步骤读到的原值做回滚（例如把时区/角色改回去）。
+    return [
+        RECORDED_TOKEN.sub(
+            lambda match: str(context.get(context_value_key(match.group(1), match.group(2))) or ""),
+            token,
+        )
+        for token in resolved
+    ]
 
 
-def should_skip(case, step, args, primary_connection_args, peer_connection_args, context):
+def missing_recorded_tokens(tokens, context):
+    """列出当前无法解析的 {recorded:...} 占位符（原值为空/没读到 → 不能拿空值去写设备）。"""
+    missing = []
+    for token in tokens:
+        for match in RECORDED_TOKEN.finditer(str(token)):
+            if not context.get(context_value_key(match.group(1), match.group(2))):
+                missing.append(match.group(0))
+    return missing
+
+
+def should_skip(case, step, args, primary_connection_args, peer_connection_args, context, observer_connection_args=None):
     target = step.get("target", "primary")
-    active_connection = peer_connection_args if target == "peer" else primary_connection_args
+    if target == "peer":
+        active_connection = peer_connection_args
+    elif target == "observer":
+        active_connection = observer_connection_args
+    else:
+        active_connection = primary_connection_args
     if step.get("requires_connection") and not active_connection:
         return "missing_connection"
     if step.get("requires_peer") and not peer_connection_args:
         return "missing_peer"
+    if step.get("requires_observer") and not observer_connection_args:
+        return "missing_observer"
+    # requires_listener：观察者没接时可以用测试设备2 当监听端（位置包这类只读观测不需要额外第三台）。
+    if step.get("requires_listener") and not (observer_connection_args or peer_connection_args):
+        return "missing_listener"
     if step.get("dest_from") and not (args.dest or context.get(step.get("dest_from"))) and args.execute:
         return "missing_dest"
     if args.execute:
@@ -866,7 +1601,8 @@ def should_skip(case, step, args, primary_connection_args, peer_connection_args,
 
 
 def build_command(base_cmd, connection_args, step_command, dest, wait_to_disconnect=0):
-    command = [base_cmd]
+    python_exe = str(LOCAL_PYTHON) if LOCAL_PYTHON.exists() else sys.executable
+    command = [python_exe, "-B", base_cmd] if str(base_cmd).lower().endswith(".py") else [base_cmd]
     if any(token in step_command for token in ("--version", "-h", "--help")):
         command.extend(step_command)
         return command
@@ -887,12 +1623,58 @@ def selected_cases(data, case_filter):
         yield case
 
 
+def active_steps_for_case(case, peer_connection_args, observer_connection_args=None):
+    """Build the executable step list for the current hardware count."""
+    has_peer = bool(peer_connection_args)
+    has_observer = bool(observer_connection_args)
+    steps = []
+    for step in case.get("steps", []):
+        if step.get("requires_peer") and not has_peer:
+            continue
+        if step.get("requires_observer") and not has_observer:
+            continue
+        if step.get("requires_listener") and not (has_peer or has_observer):
+            continue
+        steps.append(step)
+    return steps
+
+
+def adapt_case_for_connections(case, peer_connection_args, observer_connection_args=None):
+    """Keep single-device runs from reporting hidden peer/observer steps."""
+    adapted = copy.deepcopy(case)
+    adapted["steps"] = active_steps_for_case(adapted, peer_connection_args, observer_connection_args)
+    # 没有接入测试设备3 时，角色行为观测步骤会被整条剔除；必须在报告里说明 PASS 的覆盖范围，
+    # 否则 pass_meaning 仍然写着"观察者收到位置包/中继副本"，读报告的人会误判验证范围。
+    had_observer_steps = any(step.get("requires_observer") or step.get("requires_listener") for step in case.get("steps") or [])
+    if had_observer_steps and not observer_connection_args:
+        if any(step.get("requires_listener") for step in case.get("steps") or []) and peer_connection_args:
+            adapted["test_data"] = f"{adapted.get('test_data') or ''} 本次未接入测试设备3，行为观测改用测试设备2 当监听端。"
+        else:
+            adapted["test_data"] = f"{adapted.get('test_data') or ''} 本次未接入测试设备3（观察者），角色行为观测步骤未执行。"
+            adapted["pass_meaning"] = (
+                f"{adapted.get('pass_meaning') or ''} 注意：本次未接入测试设备3（观察者），"
+                "带 requires_observer 的行为观测步骤已被跳过，PASS 只代表角色写入与读回通过，不代表角色行为已观测。"
+            )
+    if not peer_connection_args and adapted.get("id") == "L2-CLI-002":
+        adapted["source_l2_case"] = "单设备身份 / 通信关键配置 / 频道快照"
+        adapted["objective"] = "连接一台设备时，只读取该设备的身份、通信关键配置和频道 0 快照；不执行测试设备2或双设备 NodeDB 检查。"
+        adapted["test_data"] = "需要测试设备1连接；只连接一台设备时不要求测试设备2。"
+        adapted["pass_meaning"] = "PASS 表示当前设备可被 CLI 控制，并已读取节点 ID、设备名、通信关键配置和频道快照；不代表双设备通信或点对点 ACK 已通过。"
+    return adapted
+
+
+def adapt_cases_for_connections(cases, peer_connection_args, observer_connection_args=None):
+    return [adapt_case_for_connections(case, peer_connection_args, observer_connection_args) for case in cases]
+
+
 
 def target_names(config_target):
     mapping = {
         "primary": [("primary", "\u6d4b\u8bd5\u8bbe\u59071")],
         "peer": [("peer", "\u6d4b\u8bd5\u8bbe\u59072")],
+        "observer": [("observer", "\u6d4b\u8bd5\u8bbe\u59073")],
         "both": [("primary", "\u6d4b\u8bd5\u8bbe\u59071"), ("peer", "\u6d4b\u8bd5\u8bbe\u59072")],
+        "all": [("primary", "\u6d4b\u8bd5\u8bbe\u59071"), ("peer", "\u6d4b\u8bd5\u8bbe\u59072"), ("observer", "\u6d4b\u8bd5\u8bbe\u59073")],
     }
     return mapping.get(config_target, mapping["primary"])
 
@@ -933,7 +1715,7 @@ def custom_config_case(args):
             if payload.get("key"):
                 pairs.append(("network.wifi_psk", payload.get("key")))
             if pairs:
-                steps.extend(config_set_many_steps(target, label, pairs))
+                steps.extend(config_set_many_steps(target, label, pairs, readback_extra_fields=["bluetooth.enabled"]))
         elif args.config_kind == "region":
             region = str(payload.get("region") or args.config_value or "").strip()
             override_frequency = str(payload.get("overrideFrequency", "0")).strip() or "0"
@@ -1045,6 +1827,7 @@ def communication_check_case(args):
         "name": "\u786e\u8ba4\u4e24\u53f0\u8bbe\u5907\u901a\u4fe1\u914d\u7f6e\u4e00\u81f4",
         "target": "both",
         "compare_config_fields": fields,
+        "requires_peer": True,
         "requires_previous_pass": True,
         "pass_criteria": "\u4e24\u53f0\u8bbe\u5907 Region / Modem Preset / Frequency Override \u4e00\u81f4\uff1bUse Preset \u4f5c\u4e3a\u8f85\u52a9\u5224\u65ad\u3002",
         "action_summary": "\u5bf9\u6bd4\u4e24\u53f0\u8bbe\u5907\u901a\u4fe1\u914d\u7f6e\u662f\u5426\u4e00\u81f4",
@@ -1116,7 +1899,10 @@ def contact_exchange_case(args):
         {
             "name": "\u6d4b\u8bd5\u8bbe\u59071\u5bfc\u5165\u6d4b\u8bd5\u8bbe\u59072\u8054\u7cfb\u4eba",
             "target": "primary",
-            "command": ["--add-contact", "$peer_contact_url"],
+            # 联系人写入走 admin 通道，不依赖本地 NodeDB；去掉完整 NodeDB 下载后
+            # COM59 的连接开销从 10-22s 降到 ~5s，再叠加 CLI 强制的 --wait-to-disconnect 10s。
+            "command": ["--no-nodes", "--add-contact", "$peer_contact_url"],
+            "timeout": 90,
             "requires_connection": True,
             "requires_peer": True,
             "requires_context": ["primary_node_id", "peer_contact_url"],
@@ -1129,7 +1915,8 @@ def contact_exchange_case(args):
         {
             "name": "\u6d4b\u8bd5\u8bbe\u59072\u5bfc\u5165\u6d4b\u8bd5\u8bbe\u59071\u8054\u7cfb\u4eba",
             "target": "peer",
-            "command": ["--add-contact", "$primary_contact_url"],
+            "command": ["--no-nodes", "--add-contact", "$primary_contact_url"],
+            "timeout": 90,
             "requires_connection": True,
             "requires_peer": True,
             "requires_context": ["peer_node_id", "primary_contact_url"],
@@ -1143,6 +1930,8 @@ def contact_exchange_case(args):
             "name": "\u786e\u8ba4\u6d4b\u8bd5\u8bbe\u59071 NodeDB \u5305\u542b\u6d4b\u8bd5\u8bbe\u59072",
             "target": "primary",
             "command": ["--nodes"],
+            # 完整 NodeDB 读取在 L1 Pro/Mesh Tower 上要 10-22s，30s 预算太紧。
+            "timeout": 60,
             "requires_connection": True,
             "requires_peer": True,
             "requires_previous_pass": True,
@@ -1156,6 +1945,8 @@ def contact_exchange_case(args):
             "name": "\u786e\u8ba4\u6d4b\u8bd5\u8bbe\u59072 NodeDB \u5305\u542b\u6d4b\u8bd5\u8bbe\u59071",
             "target": "peer",
             "command": ["--nodes"],
+            # 完整 NodeDB 读取在 L1 Pro/Mesh Tower 上要 10-22s，30s 预算太紧。
+            "timeout": 60,
             "requires_connection": True,
             "requires_peer": True,
             "requires_previous_pass": True,
@@ -1206,6 +1997,8 @@ def config_set_get_steps(target, label, field, value):
             "mutating": True,
             "conditional_set_pairs": [(field or "", value or "")],
             "change_group": group,
+            "retries": 2,
+            "retry_delay_sec": 8,
             "pass_criteria": f"{label} {name} \u5df2\u5199\u5165: {display_target_value}",
             "expect_stdout_regex": ["Connected|Writing|Setting|Saved|Set|Reboot"],
             "action_summary": f"\u5199\u5165{label}\u914d\u7f6e {name}={display_target_value}",
@@ -1231,6 +2024,8 @@ def config_set_get_steps(target, label, field, value):
             "change_group": group,
             "readback_field": field or "",
             "readback_value": value or "",
+            "retries": 4,
+            "retry_delay_sec": 8,
             "pass_criteria": f"{label} \u8bfb\u56de {name} \u4e0e\u5199\u5165\u503c\u4e00\u81f4: {display_target_value}",
             "expect_stdout_regex_any": expected_read_patterns(field, value),
             "action_summary": f"\u8bfb\u56de{label}\u914d\u7f6e {name}",
@@ -1238,7 +2033,7 @@ def config_set_get_steps(target, label, field, value):
     ]
 
 
-def config_set_many_steps(target, label, pairs):
+def config_set_many_steps(target, label, pairs, readback_extra_fields=None):
     group = change_group_key(target, "|".join(field for field, _ in pairs))
     set_command = []
     get_command = []
@@ -1248,6 +2043,11 @@ def config_set_many_steps(target, label, pairs):
     names = ", ".join(f"{display_field(field)}={display_value(field, value)}" for field, value in pairs)
     sensitive = any(any(key.lower() in field.lower() for key in SENSITIVE_KEYS) for field, _ in pairs)
     fields = [field for field, _ in pairs]
+    readback_fields = list(fields)
+    for field in readback_extra_fields or []:
+        if field and field not in readback_fields:
+            readback_fields.append(field)
+            get_command.extend(["--get", field])
     readback_values = {field: value for field, value in pairs}
     steps = [{
         "name": f"\u8bfb\u53d6\u5f53\u524d{label}\u914d\u7f6e",
@@ -1258,7 +2058,7 @@ def config_set_many_steps(target, label, pairs):
         "mutating": False,
         "pass_criteria": f"{label} \u53ef\u8bfb\u53d6\u5f53\u524d\u914d\u7f6e: {', '.join(display_field(field) for field in fields)}",
         "expect_stdout_regex_any": [re.escape(field) for field in fields],
-        "readback_fields": fields,
+        "readback_fields": readback_fields,
         "action_summary": f"Read current config for {label}: {', '.join(display_field(field) for field in fields)}",
     }]
     steps.append({
@@ -1272,6 +2072,8 @@ def config_set_many_steps(target, label, pairs):
         "sensitive_output": sensitive,
         "conditional_set_pairs": pairs,
         "change_group": group,
+        "retries": 2,
+        "retry_delay_sec": 8,
         "pass_criteria": f"{label} \u5df2\u63a5\u53d7\u914d\u7f6e\u5199\u5165: {names}",
         "expect_stdout_regex": ["Connected|Writing|Setting|Saved|Set|Reboot"],
         "action_summary": f"\u5199\u5165{label}\u914d\u7f6e {names}",
@@ -1297,8 +2099,10 @@ def config_set_many_steps(target, label, pairs):
         "requires_previous_pass": True,
         "mutating": False,
         "change_group": group,
-        "readback_fields": fields,
+        "readback_fields": readback_fields,
         "readback_values": readback_values,
+        "retries": 4,
+        "retry_delay_sec": 8,
         "pass_criteria": f"{label} \u8bfb\u56de\u914d\u7f6e\u4e0e\u5199\u5165\u503c\u4e00\u81f4: {names}",
         "expect_stdout_regex_any": patterns,
         "action_summary": f"Read back {label} config: {names}",
@@ -1388,13 +2192,14 @@ def communication_experiment_case(args):
     peer_message = args.message_peer or ""
     message_mode = args.message_mode
     message_channel = str(max(0, min(args.message_channel, 7)))
+    send_wait_to_disconnect = int(getattr(args, "wait_to_disconnect", 10) or 10)
     primary_send_command = ["--sendtext", primary_message, "--ack"]
     peer_send_command = ["--sendtext", peer_message, "--ack"]
     primary_dest = "peer_node_id"
     peer_dest = "primary_node_id"
-    send_expect = ["Acknowledgment|Acknowledgement|ACK|Ack"]
-    send_fail = ["NAK|MAX_RETRANSMIT|error reason|No route|timeout"]
-    send_criteria = "\u53d1\u9001\u547d\u4ee4\u8fd4\u56de\u6210\u529f\u4e14 CLI \u6536\u5230\u660e\u786e ACK\uff1b\u53ea\u770b\u5230 Sending/Connected \u4e0d\u7b97\u901a\u8fc7\u3002"
+    send_expect = []
+    send_fail = ["NAK|MAX_RETRANSMIT|error reason|No route|timeout|Timed out waiting"]
+    send_criteria = "\u53d1\u9001\u540e\uff0c\u5bf9\u7aef\u76d1\u542c\u8f93\u51fa\u5fc5\u987b\u770b\u5230\u540c\u4e00\u6761\u6d88\u606f\uff1b\u53ea\u770b\u5230 Sending/Connected/ACK \u4e0d\u7b97\u901a\u8fc7\u3002"
     if message_mode == "channel":
         primary_send_command = ["--ch-index", message_channel, "--sendtext", primary_message]
         peer_send_command = ["--ch-index", message_channel, "--sendtext", peer_message]
@@ -1431,9 +2236,12 @@ def communication_experiment_case(args):
             "name": "\u786e\u8ba4\u6d4b\u8bd5\u8bbe\u59071 NodeDB \u5305\u542b\u6d4b\u8bd5\u8bbe\u59072",
             "target": "primary",
             "command": ["--nodes"],
+            # 完整 NodeDB 读取在 L1 Pro/Mesh Tower 上要 10-22s，30s 预算太紧。
+            "timeout": 60,
             "requires_connection": True,
             "requires_peer": True,
             "expect_node_from": "peer_node_id",
+            "optional_visibility": True,
             "pass_criteria": "\u6d4b\u8bd5\u8bbe\u59071 NodeDB \u4e2d\u80fd\u770b\u5230\u6d4b\u8bd5\u8bbe\u59072\u8282\u70b9 ID\u3002NodeDB \u53ef\u89c1\u4e0d\u7b49\u4e8e\u6d88\u606f ACK\u3002",
             "expect_stdout_regex": ["Connected to radio"],
             "expect_stdout_regex_any": ["Nodes|User|AKA|ID|last heard|LastHeard|num"],
@@ -1443,9 +2251,12 @@ def communication_experiment_case(args):
             "name": "\u786e\u8ba4\u6d4b\u8bd5\u8bbe\u59072 NodeDB \u5305\u542b\u6d4b\u8bd5\u8bbe\u59071",
             "target": "peer",
             "command": ["--nodes"],
+            # 完整 NodeDB 读取在 L1 Pro/Mesh Tower 上要 10-22s，30s 预算太紧。
+            "timeout": 60,
             "requires_connection": True,
             "requires_peer": True,
             "expect_node_from": "primary_node_id",
+            "optional_visibility": True,
             "pass_criteria": "\u6d4b\u8bd5\u8bbe\u59072 NodeDB \u4e2d\u80fd\u770b\u5230\u6d4b\u8bd5\u8bbe\u59071\u8282\u70b9 ID\u3002NodeDB \u53ef\u89c1\u4e0d\u7b49\u4e8e\u6d88\u606f ACK\u3002",
             "expect_stdout_regex": ["Connected to radio"],
             "expect_stdout_regex_any": ["Nodes|User|AKA|ID|last heard|LastHeard|num"],
@@ -1457,7 +2268,7 @@ def communication_experiment_case(args):
             "name": f"\u6d4b\u8bd5\u8bbe\u59071\u53d1\u5230\u9891\u9053 {message_channel}" if message_mode == "channel" else "\u6d4b\u8bd5\u8bbe\u59071\u53d1\u7ed9\u6d4b\u8bd5\u8bbe\u59072",
             "target": "primary",
             "command": primary_send_command,
-            "listen_send": message_mode == "channel",
+            "listen_send": True,
             "listen_target": "peer",
             "requires_connection": True,
             "requires_peer": True,
@@ -1470,13 +2281,13 @@ def communication_experiment_case(args):
             "action_summary": f"\u6d4b\u8bd5\u8bbe\u59071\u53d1\u9001\u6d88\u606f\uff0cmode={message_mode}\uff0cchannel={message_channel}",
             "direction": "\u6d4b\u8bd5\u8bbe\u59071 -> \u6d4b\u8bd5\u8bbe\u59072" if message_mode == "device" else f"\u6d4b\u8bd5\u8bbe\u59071 -> \u9891\u9053 {message_channel}",
             "message": primary_message,
-            "wait_to_disconnect": 0,
+            "wait_to_disconnect": send_wait_to_disconnect,
         },
         {
             "name": f"\u6d4b\u8bd5\u8bbe\u59072\u53d1\u5230\u9891\u9053 {message_channel}" if message_mode == "channel" else "\u6d4b\u8bd5\u8bbe\u59072\u53d1\u7ed9\u6d4b\u8bd5\u8bbe\u59071",
             "target": "peer",
             "command": peer_send_command,
-            "listen_send": message_mode == "channel",
+            "listen_send": True,
             "listen_target": "primary",
             "requires_connection": True,
             "requires_peer": True,
@@ -1489,7 +2300,82 @@ def communication_experiment_case(args):
             "action_summary": f"\u6d4b\u8bd5\u8bbe\u59072\u53d1\u9001\u6d88\u606f\uff0cmode={message_mode}\uff0cchannel={message_channel}",
             "direction": "\u6d4b\u8bd5\u8bbe\u59072 -> \u6d4b\u8bd5\u8bbe\u59071" if message_mode == "device" else f"\u6d4b\u8bd5\u8bbe\u59072 -> \u9891\u9053 {message_channel}",
             "message": peer_message,
-            "wait_to_disconnect": 0,
+            "wait_to_disconnect": send_wait_to_disconnect,
+        },
+    ]
+    direct_cli_steps = [
+        {
+            "name": "\u6d4b\u8bd5\u8bbe\u59071\u53d1\u7ed9\u6d4b\u8bd5\u8bbe\u59072",
+            "target": "primary",
+            "command": primary_send_command,
+            "requires_connection": True,
+            "requires_peer": True,
+            "dest_from": primary_dest,
+            "mutating": True,
+            "requires_message": "primary",
+            "pass_criteria": "\u53d1\u9001\u7aef\u547d\u4ee4\u5fc5\u987b\u83b7\u5f97\u5bf9\u7aef ACK\uff1b\u4e0d\u540c\u65f6\u5360\u7528\u63a5\u6536\u7aef\u4e32\u53e3\uff0c\u4ee5\u51cf\u5c11\u811a\u672c\u76d1\u542c\u4f1a\u8bdd\u5bf9\u8bbe\u5907 UI \u6d88\u606f\u663e\u793a\u7684\u5e72\u6270\u3002",
+            "expect_stdout_regex_any": ["Received an ACK|ACK|Sending text message"],
+            "fail_on_regex": send_fail,
+            "action_summary": "\u6d4b\u8bd5\u8bbe\u59071\u5355\u6b21\u53d1\u9001\u70b9\u5bf9\u70b9\u6d88\u606f\uff0c\u53d1\u9001\u540e\u7acb\u5373\u91ca\u653e\u4e32\u53e3",
+            "direction": "\u6d4b\u8bd5\u8bbe\u59071 -> \u6d4b\u8bd5\u8bbe\u59072",
+            "message": primary_message,
+            "wait_to_disconnect": send_wait_to_disconnect,
+        },
+        {
+            "name": "\u6d4b\u8bd5\u8bbe\u59072\u53d1\u7ed9\u6d4b\u8bd5\u8bbe\u59071",
+            "target": "peer",
+            "command": peer_send_command,
+            "requires_connection": True,
+            "requires_peer": True,
+            "dest_from": peer_dest,
+            "mutating": True,
+            "requires_message": "peer",
+            "pass_criteria": "\u53d1\u9001\u7aef\u547d\u4ee4\u5fc5\u987b\u83b7\u5f97\u5bf9\u7aef ACK\uff1b\u4e0d\u540c\u65f6\u5360\u7528\u63a5\u6536\u7aef\u4e32\u53e3\uff0c\u4ee5\u51cf\u5c11\u811a\u672c\u76d1\u542c\u4f1a\u8bdd\u5bf9\u8bbe\u5907 UI \u6d88\u606f\u663e\u793a\u7684\u5e72\u6270\u3002",
+            "expect_stdout_regex_any": ["Received an ACK|ACK|Sending text message"],
+            "fail_on_regex": send_fail,
+            "action_summary": "\u6d4b\u8bd5\u8bbe\u59072\u5355\u6b21\u53d1\u9001\u70b9\u5bf9\u70b9\u6d88\u606f\uff0c\u53d1\u9001\u540e\u7acb\u5373\u91ca\u653e\u4e32\u53e3",
+            "direction": "\u6d4b\u8bd5\u8bbe\u59072 -> \u6d4b\u8bd5\u8bbe\u59071",
+            "message": peer_message,
+            "wait_to_disconnect": send_wait_to_disconnect,
+        },
+    ]
+    channel_cli_steps = [
+        {
+            "name": f"\u6d4b\u8bd5\u8bbe\u59071\u53d1\u5230\u9891\u9053 {message_channel}",
+            "target": "primary",
+            "command": primary_send_command,
+            "requires_connection": True,
+            "mutating": True,
+            "requires_message": "primary",
+            # Keep the peer serial port free during channel sends. Holding a
+            # receiver-side CLI listen session open can consume radio events in
+            # the Python client path and mask the device UI/chat behavior that
+            # this test is meant to validate.
+            "pass_criteria": f"\u6d4b\u8bd5\u8bbe\u59071\u5c06\u6d88\u606f\u4e0b\u53d1\u5230\u9891\u9053 {message_channel}\uff1b\u4e0d\u5360\u7528\u63a5\u6536\u7aef\u4e32\u53e3\uff0c\u8bbe\u5907\u5c4f\u5e55/\u804a\u5929\u6846\u53ef\u89c1\u6027\u7531\u5b9e\u673a\u89c2\u5bdf\u786e\u8ba4\u3002",
+            "expect_stdout_regex_any": ["Sending text message|Received an implicit ACK|Connected|Sent|Done|Complete"],
+            "fail_on_regex": send_fail,
+            "action_summary": f"\u6d4b\u8bd5\u8bbe\u59071\u53d1\u9001\u6d88\u606f\u5230\u9891\u9053 {message_channel}\uff0c\u63a5\u6536\u7aef\u4e32\u53e3\u4fdd\u6301\u91ca\u653e",
+            "direction": f"\u6d4b\u8bd5\u8bbe\u59071 -> \u9891\u9053 {message_channel}",
+            "message": primary_message,
+            "message_mode": "channel",
+            "wait_to_disconnect": send_wait_to_disconnect,
+        },
+        {
+            "name": f"\u6d4b\u8bd5\u8bbe\u59072\u53d1\u5230\u9891\u9053 {message_channel}",
+            "target": "peer",
+            "command": peer_send_command,
+            "requires_connection": True,
+            "requires_peer": True,
+            "mutating": True,
+            "requires_message": "peer",
+            "pass_criteria": f"\u6d4b\u8bd5\u8bbe\u59072\u5c06\u6d88\u606f\u4e0b\u53d1\u5230\u9891\u9053 {message_channel}\uff1b\u4e0d\u5360\u7528\u63a5\u6536\u7aef\u4e32\u53e3\uff0c\u8bbe\u5907\u5c4f\u5e55/\u804a\u5929\u6846\u53ef\u89c1\u6027\u7531\u5b9e\u673a\u89c2\u5bdf\u786e\u8ba4\u3002",
+            "expect_stdout_regex_any": ["Sending text message|Received an implicit ACK|Connected|Sent|Done|Complete"],
+            "fail_on_regex": send_fail,
+            "action_summary": f"\u6d4b\u8bd5\u8bbe\u59072\u53d1\u9001\u6d88\u606f\u5230\u9891\u9053 {message_channel}\uff0c\u63a5\u6536\u7aef\u4e32\u53e3\u4fdd\u6301\u91ca\u653e",
+            "direction": f"\u6d4b\u8bd5\u8bbe\u59072 -> \u9891\u9053 {message_channel}",
+            "message": peer_message,
+            "message_mode": "channel",
+            "wait_to_disconnect": send_wait_to_disconnect,
         },
     ]
     persistent_serial_step = {
@@ -1502,8 +2388,8 @@ def communication_experiment_case(args):
         "requires_context": [] if message_mode == "channel" else ["primary_node_id", "peer_node_id"],
         "mutating": True,
         "requires_message": "primary",
-        "pass_criteria": "\u4e24\u53f0\u8bbe\u5907\u90fd\u5fc5\u987b\u6536\u5230\u5bf9\u65b9\u6d88\u606f\uff1b\u53ea\u6709\u53d1\u9001\u547d\u4ee4\u6210\u529f\u4e0d\u7b97\u901a\u8fc7\u3002",
-        "action_summary": "\u7528 Python API \u540c\u65f6\u4fdd\u6301\u4e24\u4e2a\u4e32\u53e3\u8fde\u63a5\uff0c\u5b8c\u6210\u53cc\u5411\u53d1\u9001\u548c\u63a5\u6536\u5224\u5b9a\u3002",
+        "pass_criteria": "\u4e24\u4e2a\u4e32\u53e3 Python API \u4f1a\u8bdd\u90fd\u5fc5\u987b\u6536\u5230 meshtastic.receive.text \u4e8b\u4ef6\uff0c\u4e14 decoded.text \u4e0e\u7528\u6237\u8f93\u5165\u6d88\u606f\u5b8c\u5168\u4e00\u81f4\uff1b\u53ea\u6709\u53d1\u9001\u547d\u4ee4\u6210\u529f\u6216 ACK \u4e0d\u7b97\u901a\u8fc7\u3002\u8bbe\u5907\u5c4f\u5e55/\u804a\u5929\u6846\u53ef\u89c1\u6027\u9700\u8981\u8bbe\u5907\u4e32\u53e3\u65e5\u5fd7\u7684 Received text msg / DeviceUI newMessage \u4f5c\u4e8c\u7ea7\u8bc1\u636e\u3002",
+        "action_summary": "\u7528 Python API \u540c\u65f6\u4fdd\u6301\u4e24\u4e2a\u4e32\u53e3\u8fde\u63a5\uff0c\u6309 decoded.text \u5b8c\u5168\u5339\u914d\u5b8c\u6210\u53cc\u5411\u53d1\u9001\u548c\u63a5\u6536\u5224\u5b9a\u3002",
         "direction": f"device1 <-> device2; mode={message_mode}; channel={message_channel}",
         "message": primary_message,
         "primary_message": primary_message,
@@ -1512,27 +2398,50 @@ def communication_experiment_case(args):
         "channel_index": int(message_channel),
         "wait_to_disconnect": 0,
     }
+    single_channel_step = {
+        "name": f"\u6d4b\u8bd5\u8bbe\u59071\u53d1\u5230\u9891\u9053 {message_channel}",
+        "target": "primary",
+        "command": ["--ch-index", message_channel, "--sendtext", primary_message],
+        "requires_connection": True,
+        "mutating": True,
+        "requires_message": "primary",
+        "pass_criteria": f"\u5355\u8bbe\u5907\u573a\u666f\u53ea\u9a8c\u8bc1\u6d88\u606f\u5df2\u901a\u8fc7\u6d4b\u8bd5\u8bbe\u59071\u4e0b\u53d1\u5230\u9891\u9053 {message_channel}\uff1b\u6ca1\u6709\u7b2c\u4e8c\u53f0\u76d1\u542c\u8bbe\u5907\u65f6\u4e0d\u5224\u5b9a\u7a7a\u53e3\u63a5\u6536\u3002",
+        "expect_stdout_regex_any": ["Sending text message|Connected|Sent|Done|Complete"],
+        "fail_on_regex": ["NAK|MAX_RETRANSMIT|error reason|No route|timeout|Timed out waiting"],
+        "action_summary": f"\u6d4b\u8bd5\u8bbe\u59071\u53d1\u9001\u6d88\u606f\u5230\u9891\u9053 {message_channel}\uff0c\u5355\u8bbe\u5907\u4e0d\u505a\u63a5\u6536\u7aef\u5224\u5b9a",
+        "direction": f"\u6d4b\u8bd5\u8bbe\u59071 -> \u9891\u9053 {message_channel}",
+        "message": primary_message,
+        "wait_to_disconnect": send_wait_to_disconnect,
+    }
     primary_node_id = normalize_node_id(args.primary_node_id)
     peer_node_id = normalize_node_id(args.peer_node_id)
     known_device_ids = bool(primary_node_id and peer_node_id and primary_node_id != peer_node_id)
-    use_persistent_serial = bool(args.port and args.peer_port)
-    if use_persistent_serial:
-        steps = [persistent_serial_step] if (known_device_ids or message_mode == "channel") else identity_steps + [persistent_serial_step]
+    has_peer_connection = bool(args.peer_port or args.peer_host or args.peer_ble)
+    if message_mode == "channel" and not has_peer_connection:
+        steps = [single_channel_step]
+    elif message_mode == "device":
+        # For user-visible direct messages, do not keep a receiver-side serial
+        # listener open. Recent evidence showed ACK/text events in the Python API
+        # while the device UI did not show the chat message. Sequential CLI sends
+        # are closer to the official CLI path and release each port after send.
+        steps = direct_cli_steps if known_device_ids else identity_steps + direct_cli_steps
     else:
-        steps = cli_send_steps if (known_device_ids or message_mode == "channel") else identity_steps + cli_send_steps
+        # Channel communication is a device-visible workflow: keep the peer
+        # serial port free instead of using a receiver-side CLI listener.
+        steps = channel_cli_steps
     return {
         "id": "L2-COMM-EXPERIMENT",
         "module": "\u901a\u4fe1\u9a8c\u8bc1",
-        "source_l2_case": "\u9891\u9053\u901a\u4fe1 / \u70b9\u5bf9\u70b9\u53cc\u5411\u6d88\u606f",
+        "source_l2_case": "\u9891\u9053\u901a\u4fe1" if message_mode == "channel" else "\u70b9\u5bf9\u70b9\u53cc\u5411\u901a\u4fe1",
         "objective": "\u5728\u4e24\u53f0\u8bbe\u5907\u901a\u4fe1\u914d\u7f6e\u4e00\u81f4\u7684\u524d\u63d0\u4e0b\uff0c\u9a8c\u8bc1\u9891\u9053\u53d1\u9001\u6216\u70b9\u5bf9\u70b9\u53cc\u5411\u6d88\u606f\u662f\u5426\u771f\u6b63\u88ab\u5bf9\u7aef\u6536\u5230\u3002",
         "test_data": f"message_mode={message_mode}; channel={message_channel}; primary_message={primary_message or 'empty'}; peer_message={peer_message or 'empty'}",
-        "pass_meaning": "PASS \u8868\u793a\u4e24\u53f0\u8bbe\u5907\u90fd\u6536\u5230\u4e86\u5bf9\u65b9\u6d88\u606f\uff1b\u4ec5\u547d\u4ee4\u8fd4\u56de 0 \u6216\u8bbe\u5907\u4e0a\u770b\u5230\u53d1\u9001\u52a8\u4f5c\u4e0d\u7b97\u901a\u8fc7\u3002",
+        "pass_meaning": "\u901a\u4fe1\u7528\u4f8b\u5df2\u6309\u5f53\u524d\u53d1\u9001\u65b9\u5f0f\u5b8c\u6210\u3002\u9891\u9053\u6a21\u5f0f\u4e0d\u5360\u7528\u63a5\u6536\u7aef\u4e32\u53e3\uff0c\u53ea\u786e\u8ba4\u53d1\u9001\u547d\u4ee4\u5df2\u4e0b\u53d1\u5230\u5bf9\u5e94\u9891\u9053\uff0c\u8bbe\u5907\u5c4f\u5e55/\u804a\u5929\u6846\u662f\u5b9e\u673a\u89c2\u5bdf\u70b9\u3002\u70b9\u5bf9\u70b9\u6a21\u5f0f\u8981\u6c42\u5bf9\u7aef ACK\uff0c\u5e76\u91ca\u653e\u63a5\u6536\u7aef\u4e32\u53e3\u4ee5\u4fdd\u7559\u8bbe\u5907 UI \u6d88\u606f\u663e\u793a\u3002",
         "failure_help": "\u5931\u8d25\u65f6\u4f18\u5148\u68c0\u67e5\u9891\u9053/PSK\u3001Region\u3001Frequency Override\u3001Modem Preset \u662f\u5426\u4e00\u81f4\uff1b\u70b9\u5bf9\u70b9\u6a21\u5f0f\u8fd8\u8981\u786e\u8ba4\u4e24\u53f0\u8bbe\u5907\u5df2\u4ea4\u6362\u8054\u7cfb\u4eba\u516c\u94a5\u3002",
         "risk": "mutating",
         "steps": steps,
     }
 
-def run_case(case, args, connection_args, peer_connection_args, context, progress_path=None, total_steps=0, step_index=0):
+def run_case(case, args, connection_args, peer_connection_args, context, progress_path=None, total_steps=0, step_index=0, observer_connection_args=None):
     case_result = {
         "id": case.get("id"),
         "module": case.get("module"),
@@ -1549,14 +2458,28 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
     for step in case.get("steps", []):
         step_index += 1
         step_target = step.get("target", "primary")
-        skip_reason = should_skip(case, step, args, connection_args, peer_connection_args, context)
-        if not skip_reason and args.execute and step.get("requires_connection") and step_target in ("primary", "peer") and context.get(f"{step_target}:unavailable"):
+        skip_reason = should_skip(case, step, args, connection_args, peer_connection_args, context, observer_connection_args)
+        if not skip_reason and args.execute and step.get("requires_connection") and step_target in ("primary", "peer", "observer") and context.get(f"{step_target}:unavailable"):
             skip_reason = f"target_unavailable:{step_target}"
         blocked_by = ""
         if not skip_reason and step.get("requires_previous_pass") and previous_failed_or_skipped:
             skip_reason = "dependency_not_run"
+        if skip_reason == "dependency_not_run" and not args.execute:
+            # 干跑不会产生 PASS，依赖链在预览里没有意义；否则前置比对步骤会把后面整串步骤都标成 SKIPPED。
+            skip_reason = None
+        if not skip_reason:
+            missing_recorded = missing_recorded_tokens(list(step.get("command", [])), context)
+            if missing_recorded:
+                # 原始值是空的（例如设备从来没设过时区）→ 不能拿空串去写设备，直接跳过并说明原因。
+                skip_reason = "recorded_value_empty"
+                step["recorded_missing"] = missing_recorded
             blocked_by = previous_issue_step
-        step_connection_args = peer_connection_args if step.get("target") == "peer" else connection_args
+        if step.get("target") == "peer":
+            step_connection_args = peer_connection_args
+        elif step.get("target") == "observer":
+            step_connection_args = observer_connection_args
+        else:
+            step_connection_args = connection_args
         step_dest = args.dest or context.get(step.get("dest_from"))
         if not step_dest and step.get("dest_from") and not args.execute:
             step_dest = f"!{step.get('dest_from')}"
@@ -1575,11 +2498,20 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
             step_command = []
             for field, desired in changed_pairs:
                 step_command.extend(["--set", field, desired])
+        elif not args.execute and step.get("conditional_set_pairs") and not step.get("command"):
+            # 干跑预览：把「仅当值不同才写」的条件写展开成命令，避免预览里出现一条空命令。
+            step_command = []
+            for field, desired in step.get("conditional_set_pairs") or []:
+                step_command.extend(["--set", field, desired])
         wait_to_disconnect = int(step.get("wait_to_disconnect", args.wait_to_disconnect if step.get("mutating") else 0) or 0)
+        # 写操作（联系人导入/配置下发）要多付「完整连接 + --wait-to-disconnect 睡眠」的开销，
+        # 允许单个步骤覆盖 --timeout，避免只读步骤的 30s 预算把写步骤掐死在半路。
+        step_timeout = int(step.get("timeout") or args.timeout)
         command = step_command if is_api_dual_send_step else [] if (is_sleep_step or is_compare_step) else build_command(args.meshtastic, step_connection_args, step_command, step_dest if (case.get("requires_dest") or step.get("dest_from")) else None, wait_to_disconnect)
         step_result = {
             "name": step.get("name"),
             "target": step.get("target", "primary"),
+            "target_label": context_target_label(step.get("target", "primary"), context),
             "command": command,
             "status": "DRY_RUN",
             "mutating": bool(step.get("mutating")),
@@ -1591,6 +2523,7 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
             "primary_message": step.get("primary_message"),
             "peer_message": step.get("peer_message"),
             "listen_target": step.get("listen_target"),
+            "listen_target_label": context_target_label(step.get("listen_target"), context) if step.get("listen_target") else "",
             "api_dual_send": is_api_dual_send_step,
             "index": step_index,
             "total": total_steps,
@@ -1599,6 +2532,10 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
         if skip_reason:
             step_result["status"] = "SKIPPED"
             step_result["reason"] = skip_reason
+            if step.get("recorded_missing"):
+                step_result["notes"] = (
+                    f"原值为空（{', '.join(step['recorded_missing'])}），没有可回滚的值，已跳过写入。"
+                )
             if blocked_by:
                 step_result["blocked_by"] = blocked_by
             previous_failed_or_skipped = True
@@ -1623,12 +2560,21 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
         elif is_compare_step:
             if args.execute:
                 mismatches = []
+                unreadable = []
                 for field in step.get("compare_config_fields") or []:
                     primary_value = context.get(context_value_key("primary", field))
                     peer_value = context.get(context_value_key("peer", field))
+                    # 两边都读不到时不能当成"一致"，否则前置一致性检查会假 PASS。
+                    if primary_value in (None, "") or peer_value in (None, ""):
+                        unreadable.append(display_field(field))
+                        continue
                     if not compare_config_values(field, primary_value, peer_value):
                         mismatches.append(f"{display_field(field)}: {display_value(field, primary_value) or '-'} != {display_value(field, peer_value) or '-'}")
-                if mismatches:
+                if unreadable:
+                    step_result["status"] = "FAIL"
+                    step_result["reason"] = "config_unreadable"
+                    step_result["mismatch_summary"] = [f"{field}: 未能读到有效值" for field in unreadable]
+                elif mismatches:
                     step_result["status"] = "FAIL"
                     step_result["reason"] = "config_mismatch"
                     step_result["mismatch_summary"] = mismatches
@@ -1649,6 +2595,8 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
                 step.get("channel_index") or args.message_channel,
                 context.get("primary_node_id"),
                 context.get("peer_node_id"),
+                context.get("primary_public_key"),
+                context.get("peer_public_key"),
             )
             passed = raw.get("exit_code") == 0 and raw.get("received_message")
             step_result.update(raw)
@@ -1659,7 +2607,18 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
             previous_issue_step = "" if passed else step_result["name"]
         elif args.execute and is_listen_send_step:
             try:
-                receiver_connection_args = peer_connection_args if step.get("listen_target") == "peer" else connection_args
+                listen_target = step.get("listen_target") or "peer"
+                resolved_listen_target = listen_target
+                if listen_target == "observer":
+                    receiver_connection_args = observer_connection_args
+                elif listen_target == "listener":
+                    # 观察者没接就退回测试设备2 当监听端（位置包这类只读观测不需要第三台）。
+                    receiver_connection_args = observer_connection_args or peer_connection_args
+                    resolved_listen_target = "observer" if observer_connection_args else "peer"
+                elif listen_target == "peer":
+                    receiver_connection_args = peer_connection_args
+                else:
+                    receiver_connection_args = connection_args
                 wait_before_device_command(command, args)
                 raw = run_listen_send_step(
                     args,
@@ -1668,16 +2627,123 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
                     step_command,
                     step.get("message") or "",
                     step.get("channel_index") or args.message_channel,
-                    args.timeout,
-                    args.receive_wait,
+                    step_timeout,
+                    int(step.get("receive_wait") or args.receive_wait),
                     int(step.get("wait_to_disconnect", 0) or 0),
+                    step_dest if (case.get("requires_dest") or step.get("dest_from")) else "",
                 )
-                passed, reason = evaluate_expectations(raw, step.get("expect_stdout_regex", []), step.get("expect_stdout_regex_any", []), step.get("fail_on_regex", []))
-                if not raw.get("received_message"):
-                    passed, reason = False, "no_received_message"
+                relayed = bool(raw.get("relayed_message_received"))
+                portnums = {record.get("portnum") for record in raw.get("portnum_records") or []}
+                expected_portnum = str(step.get("listen_expect_portnum") or "").upper()
+                device_time_check = step.get("listen_expect_device_time")
+                copies = raw.get("relay_records") or []
+                direct_copies = [record for record in copies if not record.get("relayed")]
+                relayed_copies = [record for record in copies if record.get("relayed")]
+                window_sec = int(step.get("receive_wait") or args.receive_wait)
+                raw["listen_diagnostics"] = {
+                    "listener_target": resolved_listen_target,
+                    "listener_label": context_target_label(resolved_listen_target, context),
+                    "listener_connected": bool(raw.get("listen_connected")),
+                    "window_sec": window_sec,
+                    "copies_seen": len(copies),
+                    "direct_copies": len(direct_copies),
+                    "relayed_copies": len(relayed_copies),
+                    "portnums": sorted(value for value in portnums if value),
+                    "hop_pairs": [f"{record.get('hop_start')}->{record.get('hop_limit')}" for record in copies][:8],
+                }
+                failure_note = ""
+                if step.get("expect_no_receive"):
+                    # 负向断言：监听窗口内不该收到这条消息（例如 CLIENT_MUTE 不转发）。
+                    if raw.get("received_message"):
+                        passed, reason = False, "unexpected_receive"
+                        failure_note = (
+                            "监听端收到了这条消息。若是「必须不转发」的角色（CLIENT_MUTE），"
+                            "先看 relay_records：出现了 hop 递减副本说明有节点在转发（可能是观察者/第三方节点，不是被测设备）。"
+                        )
+                    else:
+                        passed, reason = True, "no_receive_confirmed"
+                elif device_time_check:
+                    # 用设备自己给收到的包打的 rxTime（设备时钟，UTC 秒）判断"设备时间和实际时间是否一致"。
+                    tolerance = int(step.get("listen_time_tolerance_sec") or 180)
+                    now = time.time()
+                    stamps = [record.get("rx_time") for record in raw.get("relay_records") or [] if record.get("rx_time")]
+                    raw["device_time"] = {
+                        "host_epoch": int(now),
+                        "tolerance_sec": tolerance,
+                        "device_epoch": stamps[-1] if stamps else None,
+                        "samples": stamps[-5:],
+                    }
+                    if not stamps:
+                        passed, reason = False, "device_time_not_observed"
+                        failure_note = (
+                            "监听端（被测设备）在窗口内没收到任何带时间戳的包，读不到设备时钟。"
+                            "先确认两台设备频道/PSK 与 LoRa 参数一致、距离足够；rx_time 需要设备收到包才会被打上。"
+                        )
+                    elif abs(int(stamps[-1]) - now) <= tolerance:
+                        passed, reason = True, "device_time_matches_host"
+                    else:
+                        passed, reason = False, f"device_time_skew:{int(stamps[-1] - now)}s"
+                        failure_note = (
+                            f"设备时钟与主机相差 {int(stamps[-1] - now)} 秒（超过容差 {tolerance} 秒）："
+                            "说明设备没有接受 --set-time 或时钟没有保持。报告里的 device_time 保留了主机时间与设备时间。"
+                        )
+                elif step.get("listen_expect_relayed") and not relayed:
+                    if not copies:
+                        passed, reason = False, "no_copy_observed"
+                        failure_note = (
+                            "观察窗口内连这条消息的直收副本都没有看到 —— 这通常不是角色问题，"
+                            "而是接收链路问题：先核对发送方与监听端的频道/PSK、区域/预设、距离与天线，"
+                            "以及发送方 --sendtext 是否真的发出（看本步骤 stdout）。"
+                            f"监听端连接状态：{'已握手' if raw.get('listen_connected') else '未确认握手'}。"
+                        )
+                    else:
+                        passed, reason = False, "relayed_copy_not_observed"
+                        failure_note = (
+                            f"收到了 {len(direct_copies)} 个直收副本，但没有任何 hop 递减副本"
+                            f"（hop 记录：{', '.join(raw['listen_diagnostics']['hop_pairs']) or '-'}）。"
+                            "说明这条消息没有被中继：检查被测设备角色是否已生效（上一步读回）、"
+                            "hop_limit 是否 > 0、以及被测设备是否因为「已经听到发送方直发」而取消了重播。"
+                        )
+                elif step.get("listen_expect_not_relayed") and relayed:
+                    passed, reason = False, "relayed_copy_observed"
+                    failure_note = (
+                        "出现了 hop 递减副本（本不该有）。先按 relay_records 的 relay_node/from 判断是谁中继的："
+                        "可能是监听端自己、或环境里的第三方 Meshtastic 节点，再怀疑被测设备。"
+                    )
+                elif expected_portnum and expected_portnum not in portnums:
+                    passed, reason = False, "expected_portnum_not_observed"
+                    failure_note = (
+                        f"窗口内没有收到 {expected_portnum}。已收到的包类型：{', '.join(sorted(value for value in portnums if value)) or '无'}。"
+                        "位置类包需要被测设备有位置来源（--setlat/--setlon 或 GPS）且两台设备同频道、PSK 一致。"
+                    )
+                elif step.get("listen_evidence_only"):
+                    # 只记录观察窗口里的流量证据，不判定通过/失败（长周期行为的观测窗口）。
+                    # 但「发送命令本身」的期望必须先算：例如「写角色 TRACKER」这一步同时开监听窗口，
+                    # 写入失败时不能因为"窗口里没包不算失败"就一起放过（那会造成假 PASS）。
+                    command_ok, command_reason = evaluate_expectations(
+                        raw,
+                        step.get("expect_stdout_regex", []),
+                        step.get("expect_stdout_regex_any", []),
+                        step.get("fail_on_regex", []),
+                    )
+                    if command_ok:
+                        passed, reason = True, "listen_evidence_recorded"
+                    else:
+                        passed, reason = False, command_reason
+                        failure_note = failure_note or "发送命令本身没有达到期望返回（窗口内是否收到包都不作数）。"
+                else:
+                    passed, reason = evaluate_expectations(raw, step.get("expect_stdout_regex", []), step.get("expect_stdout_regex_any", []), step.get("fail_on_regex", []))
+                    if not raw.get("received_message"):
+                        passed, reason = False, "no_received_message"
                 step_result.update(raw)
+                if raw.get("listen_only"):
+                    # 纯监听步骤没有发送命令，报告里不要把 CLI 基础命令显示成"执行了命令"。
+                    step_result["command"] = []
                 step_result["status"] = "PASS" if passed else "FAIL"
                 step_result["reason"] = reason
+                if failure_note and not passed:
+                    # 失败原因写清楚"下一步该查什么"，报告里直接能看到（UI 用 failure_note 展示）。
+                    step_result["failure_note"] = failure_note
                 mark_target_unavailable(step_result, context)
                 previous_failed_or_skipped = step_result["status"] != "PASS"
                 previous_issue_step = "" if step_result["status"] == "PASS" else step_result["name"]
@@ -1765,7 +2831,7 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
                         step_result["command"] = command
                         step_result["action_summary"] = f"Add channel {desired_name} before applying channel config."
                     wait_before_device_command(command, args)
-                    raw = run_command(command, args.timeout)
+                    raw = run_with_transport(command, step_timeout)
                     passed, reason = evaluate_expectations(raw, step.get("expect_stdout_regex", []), step.get("expect_stdout_regex_any", []), step.get("fail_on_regex", []))
                     combined = (raw.get("stdout") or "") + "\n" + (raw.get("stderr") or "")
                     if step.get("sensitive_output"):
@@ -1786,7 +2852,7 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
                 except subprocess.TimeoutExpired:
                     step_result["status"] = "FAIL"
                     step_result["reason"] = "timeout"
-                    step_result["duration_sec"] = args.timeout
+                    step_result["duration_sec"] = step_timeout
                     if step_result["target"] in ("primary", "peer"):
                         context[f"{step_result['target']}:unavailable"] = True
                     previous_failed_or_skipped = True
@@ -1798,20 +2864,32 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
                     previous_issue_step = step_result["name"]
         elif args.execute:
             try:
-                retry_safe = not step_result["mutating"] and "--sendtext" not in command
+                retry_safe = (not step_result["mutating"] or bool(step.get("conditional_set_pairs"))) and "--sendtext" not in command
                 wait_before_device_command(command, args)
-                raw = run_command_with_retries(command, args.timeout) if retry_safe else run_command(command, args.timeout)
+                retry_attempts = int(step.get("retries", 2) or 2)
+                retry_delay = float(step.get("retry_delay_sec", args.step_gap or 5) or 5)
+                raw = run_command_with_retries(command, step_timeout, attempts=retry_attempts, delay_sec=retry_delay, allow_fallback=not step_result["mutating"]) if retry_safe else run_with_transport(command, step_timeout, allow_dtr_retry="--sendtext" not in command)
                 passed, reason = evaluate_expectations(raw, step.get("expect_stdout_regex", []), step.get("expect_stdout_regex_any", []), step.get("fail_on_regex", []))
                 combined = (raw.get("stdout") or "") + "\n" + (raw.get("stderr") or "")
                 expected_node = context.get(step.get("expect_node_from"))
                 if passed and expected_node and not node_seen_in_output(expected_node, combined):
-                    passed, reason = False, f"node_not_found:{expected_node}"
+                    if step.get("optional_visibility"):
+                        reason = f"node_visibility_not_confirmed:{expected_node}"
+                        step_result["visibility_note"] = f"NodeDB did not list peer node {expected_node}; recorded as visibility evidence only."
+                    else:
+                        passed, reason = False, f"node_not_found:{expected_node}"
                 node_public_keys = parse_node_public_keys(combined)
                 if node_public_keys:
                     step_result["node_public_keys"] = node_public_keys
                     expected_public_key = public_key_for_node(combined, expected_node) if expected_node else ""
                     if expected_public_key:
                         step_result["expected_node_public_key"] = expected_public_key
+                    primary_pk = public_key_for_node(combined, context.get("primary_node_id") or args.primary_node_id)
+                    peer_pk = public_key_for_node(combined, context.get("peer_node_id") or args.peer_node_id)
+                    if primary_pk:
+                        context["primary_public_key"] = primary_pk
+                    if peer_pk:
+                        context["peer_public_key"] = peer_pk
                 if step.get("sensitive_output"):
                     raw["stdout"] = redact_sensitive(raw.get("stdout"))
                     raw["stderr"] = redact_sensitive(raw.get("stderr"))
@@ -1819,6 +2897,14 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
                 step_result["status"] = "PASS" if passed else "FAIL"
                 step_result["reason"] = reason
                 mark_target_unavailable(step_result, context)
+                if step_result["status"] == "FAIL" and step_result["mutating"] and raw.get("exit_code") == 124:
+                    # 写操作被超时强杀 ≠ 握手失败：命令很可能已经发到设备上，
+                    # 因此单独给一个原因，并说明结果要看后续校验步骤。
+                    step_result["reason"] = "mutating_command_timeout"
+                    step_result["failure_note"] = (
+                        f"\u5199\u64cd\u4f5c\u547d\u4ee4\u672a\u5728 {step_timeout}s \u5185\u8fd4\u56de\uff1b"
+                        "\u547d\u4ee4\u53ef\u80fd\u5df2\u4e0b\u53d1\u5230\u8bbe\u5907\uff0c\u8bf7\u770b\u968f\u540e\u7684 NodeDB/\u914d\u7f6e\u6821\u9a8c\u6b65\u9aa4\u3002"
+                    )
                 if step.get("conditional_set_pairs") and step.get("change_group") and passed:
                     context[f"{step.get('change_group')}:changed"] = True
                 # Only local --info can update device identity. NodeDB rows and relay
@@ -1880,7 +2966,7 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
             except subprocess.TimeoutExpired:
                 step_result["status"] = "FAIL"
                 step_result["reason"] = "timeout"
-                step_result["duration_sec"] = args.timeout
+                step_result["duration_sec"] = step_timeout
                 if step_result["target"] in ("primary", "peer"):
                     context[f"{step_result['target']}:unavailable"] = True
                 previous_failed_or_skipped = True
@@ -1896,6 +2982,8 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
 
 
 def main():
+    # 载入历史记录：某串口一旦确认「必须断言 DTR」，后续每轮都不再白等一次必然失败的尝试。
+    DTR_ASSERT_PORTS.update(load_dtr_ports())
     parser = argparse.ArgumentParser(description="Wio Tracker L2 Meshtastic CLI automation demo")
     parser.add_argument("--cases", default=str(DEFAULT_CASES), help="JSON testcase file")
     parser.add_argument("--meshtastic", default=default_meshtastic_command(), help="meshtastic CLI executable")
@@ -1907,7 +2995,7 @@ def main():
     parser.add_argument("--peer-ble", help="test device 2 BLE address or name")
     parser.add_argument("--dest", help="destination node ID, for example !28979058")
     parser.add_argument("--case", dest="case_filter", action="append", help="case ID to run; can be repeated")
-    parser.add_argument("--timeout", type=int, default=60, help="per-command timeout in seconds")
+    parser.add_argument("--timeout", type=int, default=30, help="per-command timeout in seconds")
     parser.add_argument("--execute", action="store_true", help="execute real device commands instead of dry-run")
     parser.add_argument("--allow-mutating", action="store_true", help="allow config writes and message sends")
     parser.add_argument("--custom-only", action="store_true", help="only run the custom config write case")
@@ -1915,7 +3003,7 @@ def main():
     parser.add_argument("--config-json", default="", help="dashboard config JSON")
     parser.add_argument("--config-field", default="", help="config field, for example device.role")
     parser.add_argument("--config-value", default="", help="config value, for example CLIENT")
-    parser.add_argument("--config-target", choices=("primary", "peer", "both"), default="primary", help="config target")
+    parser.add_argument("--config-target", choices=("primary", "peer", "observer", "both", "all"), default="primary", help="config target")
     parser.add_argument("--experiment-only", action="store_true", help="only run the communication experiment")
     parser.add_argument("--communication-config-only", action="store_true", help="only apply communication config")
     parser.add_argument("--communication-check-only", action="store_true", help="only check communication config consistency")
@@ -1934,6 +3022,12 @@ def main():
     parser.add_argument("--message-channel", type=int, default=0, help="channel index used for channel send")
     parser.add_argument("--primary-node-id", default="", help="known test device 1 node ID; avoids repeated identity read")
     parser.add_argument("--peer-node-id", default="", help="known test device 2 node ID; avoids repeated identity read")
+    parser.add_argument("--primary-public-key", default="", help="known test device 1 public key for PKI private messages")
+    parser.add_argument("--peer-public-key", default="", help="known test device 2 public key for PKI private messages")
+    parser.add_argument("--primary-label", default="", help="known display label for test device 1")
+    parser.add_argument("--peer-label", default="", help="known display label for test device 2")
+    parser.add_argument("--observer-port", default="", help="serial port of test device 3 (observer/listener); serial only")
+    parser.add_argument("--observer-label", default="", help="known display label for test device 3")
     parser.add_argument("--reboot-wait", type=int, default=10, help="wait seconds after config write for reboot/apply")
     parser.add_argument("--receive-wait", type=int, default=10, help="wait seconds for channel/message receive")
     parser.add_argument("--step-gap", type=float, default=5, help="protective gap between real device commands in seconds")
@@ -1945,6 +3039,7 @@ def main():
     data = json.loads(Path(args.cases).read_text(encoding="utf-8"))
     connection_args = build_connection_args(args)
     peer_connection_args = build_peer_connection_args(args)
+    observer_connection_args = build_observer_connection_args(args)
     if args.communication_config_only:
         cases = [communication_config_case(args)]
     elif args.communication_check_only:
@@ -1957,6 +3052,7 @@ def main():
         cases = [custom_config_case(args)]
     else:
         cases = list(selected_cases(data, args.case_filter))
+    cases = adapt_cases_for_connections(cases, peer_connection_args, observer_connection_args)
     total_steps = sum(len(case.get("steps", [])) for case in cases)
     results = {
         "suite": data.get("suite"),
@@ -1964,6 +3060,7 @@ def main():
         "execute": args.execute,
         "connection": connection_args,
         "peer_connection": peer_connection_args,
+        "observer_connection": observer_connection_args,
         "allow_mutating": args.allow_mutating,
         "total_steps": total_steps,
         "cases": [],
@@ -1972,10 +3069,15 @@ def main():
     context = {
         "primary_node_id": normalize_node_id(args.primary_node_id),
         "peer_node_id": normalize_node_id(args.peer_node_id),
+        "primary_public_key": args.primary_public_key.strip(),
+        "peer_public_key": args.peer_public_key.strip(),
+        "primary_short_name": args.primary_label.strip(),
+        "peer_short_name": args.peer_label.strip(),
+        "observer_short_name": args.observer_label.strip(),
     }
     step_index = 0
     for case in cases:
-        case_result, step_index = run_case(case, args, connection_args, peer_connection_args, context, args.progress_out, total_steps, step_index)
+        case_result, step_index = run_case(case, args, connection_args, peer_connection_args, context, args.progress_out, total_steps, step_index, observer_connection_args)
         results["cases"].append(case_result)
 
     primary_label = context.get("primary_short_name") or short_node_label(context.get("primary_node_id"))

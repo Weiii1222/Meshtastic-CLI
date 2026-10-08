@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from datetime import datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -16,9 +17,13 @@ PROJECT_ROOT = DASHBOARD_DIR.parents[1]
 DEMO_DIR = PROJECT_ROOT / "tests" / "meshtastic_cli_demo"
 CASES_PATH = DEMO_DIR / "cases_l2_demo.json"
 RUNNER_PATH = DEMO_DIR / "runner.py"
+MESHCORE_DEMO_DIR = PROJECT_ROOT / "tests" / "meshcore_demo"
+MESHCORE_RUNNER_PATH = MESHCORE_DEMO_DIR / "runner.py"
+SAFE_MESHTASTIC_CLI = DEMO_DIR / "safe_meshtastic_cli.py"
 AUTOMATION_COVERAGE_PATH = PROJECT_ROOT / "project-background" / "requirements" / "automation_coverage_matrix.json"
 LOGS_DIR = Path(os.environ.get("MESHTASTIC_DASHBOARD_LOG_DIR") or PROJECT_ROOT / "logs").resolve()
 LOCAL_MESHTASTIC = PROJECT_ROOT / ".venv" / "Scripts" / "meshtastic.exe"
+LOCAL_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
 RUNS = {}
 RUN_PROCESSES = {}
 RUNS_LOCK = threading.Lock()
@@ -67,7 +72,7 @@ def load_coverage():
 def list_reports(limit=12):
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     reports = sorted(
-        LOGS_DIR.glob("meshtastic_cli_*report_*.json"),
+        list(LOGS_DIR.glob("meshtastic_cli_*report_*.json")) + list(LOGS_DIR.glob("meshcore_*report_*.json")),
         key=lambda item: item.stat().st_mtime,
         reverse=True,
     )
@@ -82,6 +87,83 @@ def list_reports(limit=12):
         }
         for report in reports[:limit]
     ]
+
+
+def write_timeout_report(report_path, command, normalized, summary, job_timeout):
+    """任务被超时终止时 runner 进程来不及写报告；这里补一份超时报告。
+
+    否则报告页永远看不到这次运行（用户会以为「刷新不出来最新报告」）。
+    """
+    current = summary.get("current") or {}
+    step_name = str(current.get("step") or "运行未完成（任务超时被终止）")
+    case_id = str(current.get("case_id") or "L2-CLI-TIMEOUT")
+    body = {
+        "suite": "Meshtastic CLI 自动化提效 Demo",
+        "status": "timeout",
+        "reason": "job_timeout",
+        "transport": "serial_cli" if normalized.get("connectionType") == "port" else normalized.get("connectionType"),
+        "started_at": current.get("time") or datetime.now().isoformat(timespec="seconds"),
+        "finished_at": datetime.now().isoformat(timespec="seconds"),
+        "job_timeout_sec": job_timeout,
+        "execute": normalized.get("execute"),
+        "allow_mutating": normalized.get("allowMutating"),
+        "connection": {
+            "type": normalized.get("connectionType"),
+            "port": normalized.get("primaryPort") or normalized.get("connectionValue"),
+        },
+        "peer_connection": {"port": normalized.get("peerPort")},
+        "observer_connection": {"port": normalized.get("observerPort")},
+        "total_steps": summary.get("total"),
+        "steps_done": summary.get("done"),
+        "command": [str(part) for part in command],
+        "cases": [
+            {
+                "id": case_id,
+                "module": "运行超时",
+                "steps": [
+                    {
+                        "name": step_name,
+                        "status": "FAIL",
+                        "reason": "job_timeout",
+                        "target": current.get("target") or "",
+                        "duration_sec": job_timeout,
+                        "command": current.get("command") or [],
+                        "stderr": (
+                            f"任务在 {job_timeout} 秒内未完成，已被服务端终止；"
+                            f"runner 未生成完整报告，此处按进度文件补录（已完成 {summary.get('done')}/{summary.get('total')} 步）。"
+                        ),
+                    }
+                ],
+            }
+        ],
+        "progress_events": summary.get("events") or [],
+    }
+    try:
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        return None
+    return body
+
+
+def save_client_report(payload):
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    run_id = uuid.uuid4().hex[:12]
+    report = LOGS_DIR / f"meshtastic_cli_webble_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{run_id}.json"
+    body = dict(payload.get("result") or {})
+    if not body:
+        body = {"suite": payload.get("suite") or "Meshtastic Web Bluetooth", "cases": []}
+    body.setdefault("suite", payload.get("suite") or "Meshtastic Web Bluetooth")
+    body["transport"] = payload.get("transport") or "web_bluetooth"
+    body["connection_type"] = payload.get("connectionType") or "ble"
+    body["generated_by"] = "dashboard_browser"
+    body["saved_at"] = datetime.now().isoformat(timespec="seconds")
+    report.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {
+        "report": str(report),
+        "reportName": report.name,
+        "reports": list_reports(),
+    }
 
 
 def normalize_usb_serial(value):
@@ -110,6 +192,15 @@ def extract_usb_instance(text):
     return ""
 
 
+def extract_usb_id(text):
+    match = re.search(r"VID_([0-9A-Fa-f]{4}).*PID_([0-9A-Fa-f]{4})", text or "")
+    if not match:
+        match = re.search(r"VID:PID=([0-9A-Fa-f]{4}):([0-9A-Fa-f]{4})", text or "")
+    if not match:
+        return ""
+    return f"USB {match.group(1).upper()}:{match.group(2).upper()}"
+
+
 def friendly_port_name(name, manufacturer):
     name = (name or "").strip()
     manufacturer = (manufacturer or "").strip()
@@ -130,6 +221,7 @@ def enrich_port(port, name="", manufacturer="", hwid="", text=""):
         "hwid": hwid or "",
         "usbSerial": usb_serial,
         "deviceId": device_id,
+        "usbId": extract_usb_id(text),
         "likelyDevice": is_likely_meshtastic_port(text),
     }
 
@@ -151,8 +243,11 @@ def detect_serial_ports():
             by_port = {item["port"]: item for item in ports}
             for wmi_port in wmi_ports:
                 existing = by_port.get(wmi_port["port"])
-                if existing and not existing.get("deviceId"):
-                    existing["deviceId"] = wmi_port.get("deviceId") or ""
+                if existing:
+                    if not existing.get("deviceId"):
+                        existing["deviceId"] = wmi_port.get("deviceId") or ""
+                    if not existing.get("usbId"):
+                        existing["usbId"] = wmi_port.get("usbId") or extract_usb_id(existing.get("hwid") or wmi_port.get("hwid") or "")
                     existing["hwid"] = wmi_port.get("hwid") or existing.get("hwid") or ""
                 elif not existing:
                     by_port[wmi_port["port"]] = wmi_port
@@ -163,7 +258,84 @@ def detect_serial_ports():
     if ports:
         return sorted(unique_ports(ports), key=lambda item: natural_com_key(item["port"]))
 
+    ports = detect_serial_ports_with_registry()
+    if ports:
+        return sorted(unique_ports(ports), key=lambda item: natural_com_key(item["port"]))
+
     return detect_serial_ports_with_dotnet()
+
+
+def meshtastic_command(*args):
+    base = str(SAFE_MESHTASTIC_CLI) if SAFE_MESHTASTIC_CLI.exists() else str(LOCAL_MESHTASTIC) if LOCAL_MESHTASTIC.exists() else "meshtastic"
+    python_exe = str(LOCAL_PYTHON) if LOCAL_PYTHON.exists() else sys.executable
+    command = [python_exe, "-B", base] if base.lower().endswith(".py") else [base]
+    command.extend(args)
+    return command
+
+
+def parse_ble_scan_output(stdout, stderr=""):
+    devices = []
+    seen = set()
+    for line in "\n".join([stdout or "", stderr or ""]).splitlines():
+        name = ""
+        address = ""
+        quoted = re.search(r"name='([^']*)'.*address='([^']*)'", line, flags=re.IGNORECASE)
+        if quoted:
+            name = (quoted.group(1) or "").strip()
+            address = (quoted.group(2) or "").strip()
+        else:
+            address_match = re.search(r"\b([0-9A-F]{2}(?::[0-9A-F]{2}){5})\b", line, flags=re.IGNORECASE)
+            name_match = re.search(r"\b(Meshtastic[^\s,;)]*)", line, flags=re.IGNORECASE)
+            if address_match:
+                address = address_match.group(1).strip()
+            if name_match:
+                name = name_match.group(1).strip()
+        if not name and not address:
+            continue
+        key = address or name
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        devices.append({
+            "name": name or "Meshtastic BLE",
+            "address": address,
+            "value": address or name,
+        })
+    return devices
+
+
+def scan_ble_devices():
+    command = meshtastic_command("--ble-scan")
+    started = datetime.now().isoformat(timespec="seconds")
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=18,
+            check=False,
+        )
+        return {
+            "devices": parse_ble_scan_output(completed.stdout, completed.stderr),
+            "exitCode": completed.returncode,
+            "stdout": completed.stdout[-4000:],
+            "stderr": completed.stderr[-4000:],
+            "command": command,
+            "startedAt": started,
+            "finishedAt": datetime.now().isoformat(timespec="seconds"),
+        }
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "devices": [],
+            "exitCode": 124,
+            "stdout": (exc.stdout or "")[-4000:] if isinstance(exc.stdout, str) else "",
+            "stderr": "BLE scan timed out after 18 seconds. 请确认 Windows 蓝牙已开启，设备蓝牙处于可发现状态，并关闭正在占用该设备的 App/网页连接。",
+            "command": command,
+            "startedAt": started,
+            "finishedAt": datetime.now().isoformat(timespec="seconds"),
+        }
 
 
 def detect_serial_ports_with_wmi():
@@ -236,6 +408,45 @@ def detect_serial_ports_with_dotnet():
         return []
 
 
+def detect_serial_ports_with_registry():
+    # Windows keeps the active COM mapping in the SERIALCOMM registry key even
+    # when WMI providers are temporarily stale. This is a display-only fallback.
+    script = (
+        "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); "
+        "$OutputEncoding = [Console]::OutputEncoding; "
+        "$key = 'HKLM:\\HARDWARE\\DEVICEMAP\\SERIALCOMM'; "
+        "if (Test-Path $key) { "
+        "  (Get-ItemProperty $key).PSObject.Properties | "
+        "    Where-Object { $_.Value -match '^COM[0-9]+$' } | "
+        "    Select-Object @{Name='Port';Expression={$_.Value}}, @{Name='Name';Expression={$_.Name}} | "
+        "    ConvertTo-Json -Depth 3 "
+        "}"
+    )
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            check=False,
+        )
+        if completed.returncode != 0 or not completed.stdout.strip():
+            return []
+        raw = json.loads(completed.stdout)
+        rows = raw if isinstance(raw, list) else [raw]
+        ports = []
+        for row in rows:
+            port = str(row.get("Port") or "").upper()
+            if re.fullmatch(r"COM\d+", port, flags=re.IGNORECASE):
+                name = str(row.get("Name") or "串口设备")
+                ports.append(enrich_port(port, name, "", "", f"{name} {port}"))
+        return ports
+    except Exception:
+        return []
+
+
 def unique_ports(ports):
     output = {}
     for item in ports:
@@ -254,7 +465,25 @@ def is_likely_meshtastic_port(text):
     return any(marker in lowered for marker in markers)
 
 
+def selected_case_step_count(cases, selected, has_peer):
+    selected_set = set(selected or [])
+    if not selected_set:
+        return 0
+    total = 0
+    for case in cases:
+        if case.get("id") not in selected_set:
+            continue
+        for step in case.get("steps") or []:
+            if step.get("requires_peer") and not has_peer:
+                continue
+            total += 1
+    return total
+
+
 def sanitize_run_request(payload):
+    system_mode = str(payload.get("systemMode") or "meshtastic").strip().lower()
+    if system_mode not in ("meshtastic", "meshcore"):
+        system_mode = "meshtastic"
     cases = load_cases()["cases"]
     all_case_ids = {case["id"] for case in cases}
     module_map = {}
@@ -264,6 +493,9 @@ def sanitize_run_request(payload):
     target_type = payload.get("targetType", "suite")
     if target_type == "case":
         selected = [payload.get("caseId")]
+    elif target_type == "cases":
+        # BLE 测试项卡片按勾选项逐条运行（例如 7 个时区别名只选其中几条）。
+        selected = [str(case_id) for case_id in (payload.get("caseIds") or []) if case_id]
     elif target_type == "module":
         selected = module_map.get(payload.get("module"), [])
     elif target_type == "modules":
@@ -293,15 +525,38 @@ def sanitize_run_request(payload):
     peer_port = str(payload.get("peerPort") or "").strip()
     peer_host = str(payload.get("peerHostValue") or "").strip()
     peer_ble = str(payload.get("peerBleValue") or "").strip()
+    # 测试设备3（观察者）只支持串口：它要长时间 --listen 抓包。
+    observer_port = str(payload.get("observerPort") or "").strip()
+    ble_pair = bool(payload.get("blePair", True))
 
-    args = [sys.executable, "-B", str(RUNNER_PATH)]
-    if LOCAL_MESHTASTIC.exists():
+    # Keep one active transport family per run. UI state can retain stale COM/TCP/BLE
+    # fields after switching connection types; sending them together creates false
+    # mixed routes such as "--ble Meshtastic_xxx --peer-port COM8".
+    if connection_type != "port":
+        primary_port = ""
+        peer_port = ""
+        observer_port = ""
+    if connection_type != "host":
+        host_value = ""
+        peer_host = ""
+    if connection_type != "ble":
+        ble_value = ""
+        peer_ble = ""
+
+    runner_python = str(LOCAL_PYTHON) if LOCAL_PYTHON.exists() else sys.executable
+    runner_path = MESHCORE_RUNNER_PATH if system_mode == "meshcore" else RUNNER_PATH
+    if not runner_path.exists():
+        raise ValueError(f"{system_mode} runner 不存在：{runner_path}")
+    args = [runner_python, "-B", str(runner_path)]
+    if system_mode == "meshtastic" and SAFE_MESHTASTIC_CLI.exists():
+        args.extend(["--meshtastic", str(SAFE_MESHTASTIC_CLI)])
+    elif system_mode == "meshtastic" and LOCAL_MESHTASTIC.exists():
         args.extend(["--meshtastic", str(LOCAL_MESHTASTIC)])
     if payload.get("execute"):
         args.append("--execute")
     if payload.get("allowMutating"):
         args.append("--allow-mutating")
-    timeout = int(payload.get("timeout") or 60)
+    timeout = int(payload.get("timeout") or 30)
     timeout = max(5, min(timeout, 300))
     args.extend(["--timeout", str(timeout)])
     step_gap = float(payload.get("stepGap") or 5)
@@ -320,16 +575,28 @@ def sanitize_run_request(payload):
         args.extend(["--ble", ble_value])
     elif connection_type == "ble" and connection_value:
         args.extend(["--ble", connection_value])
-    if peer_port:
+    if connection_type == "port" and peer_port:
         args.extend(["--peer-port", peer_port])
     elif connection_type == "host" and peer_host:
         args.extend(["--peer-host", peer_host])
     elif connection_type == "ble" and peer_ble:
         args.extend(["--peer-ble", peer_ble])
+    has_peer_connection = bool(peer_port or (connection_type == "host" and peer_host) or (connection_type == "ble" and peer_ble))
 
     dest = str(payload.get("dest") or "").strip()
     if dest:
         args.extend(["--dest", dest])
+    primary_label = str(payload.get("primaryLabel") or "").strip()
+    peer_label = str(payload.get("peerLabel") or "").strip()
+    observer_label = str(payload.get("observerLabel") or "").strip()
+    if primary_label:
+        args.extend(["--primary-label", primary_label])
+    if peer_label:
+        args.extend(["--peer-label", peer_label])
+    if connection_type == "port" and observer_port:
+        args.extend(["--observer-port", observer_port])
+        if observer_label:
+            args.extend(["--observer-label", observer_label])
 
     if target_type == "customConfig":
         config_kind = str(payload.get("configKind") or "field").strip()
@@ -385,6 +652,8 @@ def sanitize_run_request(payload):
         message_mode = str(payload.get("messageMode") or "device").strip()
         primary_node_id = str(payload.get("primaryNodeId") or "").strip()
         peer_node_id = str(payload.get("peerNodeId") or "").strip()
+        primary_public_key = str(payload.get("primaryPublicKey") or "").strip()
+        peer_public_key = str(payload.get("peerPublicKey") or "").strip()
         try:
             message_channel = int(payload.get("messageChannel") or 0)
         except (TypeError, ValueError):
@@ -409,6 +678,10 @@ def sanitize_run_request(payload):
             args.extend(["--primary-node-id", primary_node_id])
         if peer_node_id:
             args.extend(["--peer-node-id", peer_node_id])
+        if primary_public_key:
+            args.extend(["--primary-public-key", primary_public_key])
+        if peer_public_key:
+            args.extend(["--peer-public-key", peer_public_key])
         args.extend(["--message-channel", str(max(0, min(message_channel, 7)))])
         args.extend(["--reboot-wait", str(reboot_wait)])
         args.extend(["--receive-wait", str(receive_wait)])
@@ -420,11 +693,14 @@ def sanitize_run_request(payload):
 
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     run_id = uuid.uuid4().hex[:12]
-    report = LOGS_DIR / f"meshtastic_cli_dashboard_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{run_id}.json"
-    progress = LOGS_DIR / f"meshtastic_cli_progress_{run_id}.jsonl"
+    report_prefix = "meshcore_dashboard" if system_mode == "meshcore" else "meshtastic_cli_dashboard"
+    progress_prefix = "meshcore_progress" if system_mode == "meshcore" else "meshtastic_cli_progress"
+    report = LOGS_DIR / f"{report_prefix}_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{run_id}.json"
+    progress = LOGS_DIR / f"{progress_prefix}_{run_id}.jsonl"
     args.extend(["--out", str(report)])
     args.extend(["--progress-out", str(progress)])
     normalized = {
+        "systemMode": system_mode,
         "connectionType": connection_type,
         "primaryPort": primary_port or connection_value,
         "hostValue": host_value,
@@ -432,6 +708,9 @@ def sanitize_run_request(payload):
         "peerPort": peer_port,
         "peerHostValue": peer_host,
         "peerBleValue": peer_ble,
+        "observerPort": observer_port,
+        "observerLabel": payload.get("observerLabel"),
+        "blePair": ble_pair,
         "configTarget": payload.get("configTarget"),
         "configKind": payload.get("configKind"),
         "configField": payload.get("configField"),
@@ -444,23 +723,33 @@ def sanitize_run_request(payload):
         "receiveWait": payload.get("receiveWait"),
         "primaryNodeId": payload.get("primaryNodeId"),
         "peerNodeId": payload.get("peerNodeId"),
+        "primaryLabel": payload.get("primaryLabel"),
+        "peerLabel": payload.get("peerLabel"),
     }
-    estimated_steps = len(selected) * 6
+    estimated_steps = selected_case_step_count(cases, selected, has_peer_connection)
     if target_type == "customConfig":
-        estimated_steps = 8 if str(payload.get("configTarget") or "primary").strip() == "both" else 4
+        config_target = str(payload.get("configTarget") or "primary").strip()
+        estimated_steps = 8 if config_target == "both" and has_peer_connection else 4
     elif target_type == "communicationConfig":
-        estimated_steps = 8
+        estimated_steps = 8 if has_peer_connection else 4
     elif target_type == "communicationCheck":
-        estimated_steps = 3
+        estimated_steps = 3 if has_peer_connection else 1
     elif target_type == "communicationExperiment":
         has_serial_pair = connection_type == "port" and bool(primary_port and peer_port)
         has_distinct_ids = bool(payload.get("primaryNodeId") and payload.get("peerNodeId") and payload.get("primaryNodeId") != payload.get("peerNodeId"))
         message_mode = str(payload.get("messageMode") or "device").strip()
-        estimated_steps = 1 if has_serial_pair and (message_mode == "channel" or has_distinct_ids) else 9
+        if message_mode == "channel":
+            estimated_steps = 2
+        elif has_serial_pair:
+            estimated_steps = 2 if has_distinct_ids else 6
+        else:
+            estimated_steps = 2 if has_distinct_ids else 6
     elif target_type == "contactExchange":
         estimated_steps = 8
     normalized["estimatedSteps"] = estimated_steps
-    job_timeout = timeout * max(1, estimated_steps) + 180
+    # 每一步在最坏情况下会走「no-reset 包装器重试 + 官方 CLI 回退」链路，
+    # 因此预算按 2 倍命令超时估算，避免慢设备上整轮任务被服务端提前杀掉（杀早了 runner 就来不及写报告）。
+    job_timeout = timeout * max(1, estimated_steps) * 2 + 300
     return args, report, progress, selected, job_timeout, normalized
 
 
@@ -498,6 +787,11 @@ def run_job(job_id, command, report, progress, job_timeout, selected, normalized
         RUNS[job_id].update({"status": "running", "startedAt": datetime.now().isoformat(timespec="seconds")})
     child_env = os.environ.copy()
     child_env["PYTHONIOENCODING"] = "utf-8"
+    if normalized.get("connectionType") == "ble" and normalized.get("blePair"):
+        child_env["MESHTASTIC_BLE_PAIR"] = "1"
+        child_env.setdefault("MESHTASTIC_BLE_TIMEOUT", "60")
+    else:
+        child_env.pop("MESHTASTIC_BLE_PAIR", None)
     try:
         process = subprocess.Popen(
             command,
@@ -537,8 +831,21 @@ def run_job(job_id, command, report, progress, job_timeout, selected, normalized
             process = RUN_PROCESSES.pop(job_id, None)
         if process:
             terminate_process_tree(process)
+        # runner 被强杀后不会再写报告文件；这里按进度文件补一份超时报告，
+        # 否则报告页刷新出来的永远是上一轮的旧报告（用户会认为「刷新不出最新报告」）。
+        summary = summarize_progress(read_progress(progress), normalized.get("estimatedSteps"))
+        body = write_timeout_report(report, command, normalized, summary, job_timeout) or {}
         with RUNS_LOCK:
-            RUNS[job_id].update({"status": "timeout", "error": "timeout", "finishedAt": datetime.now().isoformat(timespec="seconds")})
+            RUNS[job_id].update({
+                "status": "timeout",
+                "error": "timeout",
+                "report": str(report),
+                "reportName": report.name,
+                "result": body,
+                "progressSummary": summary,
+                "normalized": normalized,
+                "finishedAt": datetime.now().isoformat(timespec="seconds"),
+            })
     except Exception as exc:
         with RUNS_LOCK:
             RUN_PROCESSES.pop(job_id, None)
@@ -566,7 +873,7 @@ def serial_log_worker(log_id, port, baud, output_path, stop_event):
         try:
             import serial
         except Exception as exc:
-            raise RuntimeError(f"缺少 pyserial，无法打开旁路日志串口：{exc}") from exc
+            raise RuntimeError(f"缺少 pyserial，无法打开串口日志：{exc}") from exc
         with output_path.open("a", encoding="utf-8", errors="replace") as handle:
             handle.write(f"[{datetime.now().isoformat(timespec='seconds')}] start port={port} baud={baud}\n")
             with serial.Serial(port, baudrate=baud, timeout=1) as serial_port:
@@ -591,7 +898,7 @@ def serial_log_worker(log_id, port, baud, output_path, stop_event):
 def start_serial_log(payload):
     port = str(payload.get("port") or "").strip().upper()
     if not re.fullmatch(r"COM\d+", port, flags=re.IGNORECASE):
-        raise ValueError("请选择一个有效的旁路日志串口。")
+        raise ValueError("请选择一个有效的日志串口。")
     baud = int(payload.get("baud") or 115200)
     baud = max(1200, min(baud, 2000000))
     log_id = uuid.uuid4().hex
@@ -648,9 +955,118 @@ def report_path_from_query(query):
     return path
 
 
+def is_safe_retry_command(command):
+    if not isinstance(command, list) or not command:
+        return False
+    command_text = " ".join(str(part) for part in command)
+    if any(token in command_text for token in (";", "&&", "||", "|", ">", "<")):
+        return False
+    allowed_markers = (
+        str(SAFE_MESHTASTIC_CLI),
+        str(LOCAL_MESHTASTIC),
+        "safe_meshtastic_cli.py",
+        "meshtastic.exe",
+        "meshtastic",
+    )
+    return any(marker and marker in command_text for marker in allowed_markers)
+
+
+def retry_single_step(payload):
+    step = payload.get("step") or {}
+    command = step.get("command") or []
+    if step.get("mutating") or any(token in command for token in ("--set", "--sendtext", "--ch-set", "--ch-add", "--add-contact")):
+        raise ValueError("写入/发送类步骤不支持单步重试。")
+    if not is_safe_retry_command(command):
+        raise ValueError("重试命令不在允许范围内。")
+    timeout = int(payload.get("timeout") or step.get("timeout") or 30)
+    timeout = max(5, min(timeout, 180))
+    started = datetime.now()
+    completed = None
+    transient_markers = (
+        "connection timed out",
+        "could not open port",
+        "serial device couldn't be opened",
+        "access is denied",
+        "permissionerror",
+        "filenotfounderror",
+        "cannot configure port",
+        "timed out waiting for connection completion",
+        "timed out waiting for packet",
+        "no response",
+        "reader is dead",
+        "protocol",
+        "handshake",
+        "failed to connect",
+        "command_timeout_after_",
+        "系统找不到指定的文件",
+        "拒绝访问",
+    )
+    attempts = 2
+    for attempt in range(1, attempts + 1):
+        try:
+            completed = subprocess.run(
+                [str(part) for part in command],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else exc.stdout or ""
+            stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else exc.stderr or ""
+            completed = subprocess.CompletedProcess(
+                [str(part) for part in command],
+                124,
+                stdout,
+                f"{stderr}\ncommand_timeout_after_{timeout}s".strip(),
+            )
+        combined = f"{completed.stdout or ''}\n{completed.stderr or ''}".lower()
+        if completed.returncode == 0 or attempt >= attempts or not any(marker in combined for marker in transient_markers):
+            break
+        time.sleep(5)
+    duration = (datetime.now() - started).total_seconds()
+    status = "PASS" if completed.returncode == 0 else "FAIL"
+    retry_step = dict(step)
+    retry_step.update({
+        "index": 1,
+        "total": 1,
+        "status": status,
+        "reason": "retry_exit_code_zero" if completed.returncode == 0 else "exit_code_nonzero",
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+        "exit_code": completed.returncode,
+        "attempt": attempt,
+        "duration_sec": round(duration, 2),
+        "action_summary": f"单独重试失败步骤：{step.get('name') or '-'}",
+    })
+    run_id = uuid.uuid4().hex
+    return {
+        "id": run_id,
+        "status": "done" if completed.returncode == 0 else "failed",
+        "result": {
+            "cases": [{
+                "id": f"STEP-RETRY-{str(payload.get('caseId') or 'CASE')}",
+                "module": "单步重试",
+                "source_l2_case": payload.get("caseTitle") or "失败步骤重试",
+                "objective": "仅重新执行上一轮失败的非写入步骤。",
+                "steps": [retry_step],
+            }],
+        },
+    }
+
+
 class DashboardHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(DASHBOARD_DIR), **kwargs)
+
+    def send_header(self, keyword, value):
+        if keyword.lower() == "content-type":
+            bare_value = str(value).split(";", 1)[0].strip()
+            if bare_value in {"text/html", "text/css", "text/javascript", "application/javascript"}:
+                value = f"{bare_value}; charset=utf-8"
+        super().send_header(keyword, value)
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
@@ -720,6 +1136,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         if path == "/api/ports":
             self.write_json(200, {"ports": detect_serial_ports()})
             return
+        if path == "/api/ble-scan":
+            self.write_json(200, scan_ble_devices())
+            return
         if path == "/api/health":
             self.write_json(200, {"ok": True, "projectRoot": str(PROJECT_ROOT), "logsDir": str(LOGS_DIR), "meshtasticCli": str(LOCAL_MESHTASTIC) if LOCAL_MESHTASTIC.exists() else "meshtastic"})
             return
@@ -743,6 +1162,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 self.write_json(404, {"error": "serial_log_not_found"})
                 return
             self.write_json(200, item)
+            return
+        if path == "/api/run-step":
+            length = int(self.headers.get("Content-Length") or "0")
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                self.write_json(200, retry_single_step(payload))
+            except Exception as exc:
+                self.write_json(400, {"error": str(exc)})
+            return
+        if path == "/api/client-report":
+            length = int(self.headers.get("Content-Length") or "0")
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+                self.write_json(200, save_client_report(payload))
+            except Exception as exc:
+                self.write_json(400, {"error": str(exc)})
             return
         if path == "/api/cancel":
             length = int(self.headers.get("Content-Length") or "0")
