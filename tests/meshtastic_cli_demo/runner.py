@@ -18,7 +18,7 @@ DEFAULT_CASES = Path(__file__).with_name("cases_l2_demo.json")
 LOCAL_MESHTASTIC = PROJECT_ROOT / ".venv" / "Scripts" / "meshtastic.exe"
 LOCAL_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
 SAFE_MESHTASTIC_CLI = Path(__file__).with_name("safe_meshtastic_cli.py")
-SENSITIVE_KEYS = ("private_key", "privateKey", "preshared_key", "psk", "wifi_psk", "password", "admin_key", "secret", "complete_url")
+SENSITIVE_KEYS = ("private_key", "privateKey", "preshared_key", "psk", "wifi_psk", "password", "admin_key", "fixed_pin", "fixedPin", "secret", "complete_url")
 
 DISPLAY_NAMES = {
     "lora.region": "Region",
@@ -604,6 +604,21 @@ def redact_sensitive(text):
         redacted = re.sub(rf"({re.escape(key)}\s*[:=]\s*)(['\"]?)[^\s,'\"\r\n]+(\2)", rf"\1\2<redacted>\3", redacted, flags=re.IGNORECASE)
         redacted = re.sub(rf"({re.escape(key)}['\"]?\s*:\s*['\"])[^'\"]+(['\"])", rf"\1<redacted>\2", redacted, flags=re.IGNORECASE)
     return redacted
+
+
+def redact_report_value(value):
+    """Recursively redact report text only after execution has completed.
+
+    The runner still needs original values in memory for command evaluation, but
+    raw CLI/API output must never be persisted with credentials or keys.
+    """
+    if isinstance(value, str):
+        return redact_sensitive(value)
+    if isinstance(value, list):
+        return [redact_report_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: redact_report_value(item) for key, item in value.items()}
+    return value
 
 def short_node_label(node_id):
     compact = (node_id or "").lstrip("!")
@@ -1655,7 +1670,7 @@ def adapt_case_for_connections(case, peer_connection_args, observer_connection_a
                 f"{adapted.get('pass_meaning') or ''} 注意：本次未接入测试设备3（观察者），"
                 "带 requires_observer 的行为观测步骤已被跳过，PASS 只代表角色写入与读回通过，不代表角色行为已观测。"
             )
-    if not peer_connection_args and adapted.get("id") == "L2-CLI-002":
+    if not peer_connection_args and adapted.get("id") == "MT-PRECHECK-PAIR":
         adapted["source_l2_case"] = "单设备身份 / 通信关键配置 / 频道快照"
         adapted["objective"] = "连接一台设备时，只读取该设备的身份、通信关键配置和频道 0 快照；不执行测试设备2或双设备 NodeDB 检查。"
         adapted["test_data"] = "需要测试设备1连接；只连接一台设备时不要求测试设备2。"
@@ -1665,6 +1680,122 @@ def adapt_case_for_connections(case, peer_connection_args, observer_connection_a
 
 def adapt_cases_for_connections(cases, peer_connection_args, observer_connection_args=None):
     return [adapt_case_for_connections(case, peer_connection_args, observer_connection_args) for case in cases]
+
+
+def expand_region_public_regression_case(case):
+    """Expand declarative US/EU public-channel regressions into a controlled repair flow.
+
+    Only Region is repaired because the case definition only declares a Region target.
+    Modem preset, frequency override and channel/PSK remain observable preconditions:
+    changing them here would hide an incompatibility instead of testing it.
+    """
+    region = str(case.get("region_regression_target") or "").strip()
+    if not region:
+        return case
+
+    adapted = copy.deepcopy(case)
+    fields = ["lora.region", "lora.modem_preset", "lora.override_frequency"]
+    read_command = []
+    for field in fields:
+        read_command.extend(["--get", field])
+    steps = []
+
+    # Capture both devices before mutation so the report preserves the original state.
+    for target, label in (("primary", "测试设备 1"), ("peer", "测试设备 2")):
+        steps.append({
+            "name": f"读取{label}通信配置",
+            "target": target,
+            "command": read_command,
+            "requires_connection": True,
+            "requires_peer": target == "peer",
+            "requires_previous_pass": bool(steps),
+            "mutating": False,
+            "readback_fields": fields,
+            "expect_stdout_regex_any": [r"(?i)lora\\.region", r"(?i)lora\\.modem_preset", r"(?i)lora\\.override_frequency"],
+            "pass_criteria": f"读取{label}的 Region、Modem Preset 和 Frequency Override 原始值。",
+            "action_summary": f"读取{label}通信配置，作为回归前置证据",
+        })
+
+    for target, label in (("primary", "测试设备 1"), ("peer", "测试设备 2")):
+        group = change_group_key(target, f"serial-region-public-{region}")
+        steps.extend([
+            {
+                "name": f"必要时将{label} Region 修正为 {region}",
+                "target": target,
+                "command": ["--set", "lora.region", region],
+                "requires_connection": True,
+                "requires_peer": target == "peer",
+                "requires_previous_pass": True,
+                "mutating": True,
+                "conditional_set_pairs": [("lora.region", region)],
+                "change_group": group,
+                "retries": 2,
+                "retry_delay_sec": 8,
+                "expect_stdout_regex_any": [r"(?i)connected|writing|setting|saved|set|reboot"],
+                "pass_criteria": f"仅当当前 Region 非 {region} 时下发 lora.region={region}；不修改 Modem Preset 或 Frequency Override。",
+                "action_summary": f"必要时修正{label} Region 为 {region}",
+            },
+            {
+                "name": f"等待{label} Region 生效",
+                "target": target,
+                "sleep_sec": "reboot_wait",
+                "requires_previous_pass": True,
+                "change_group": group,
+                "pass_criteria": "如发生 Region 写入，已等待设备重启和配置生效；未写入时跳过等待。",
+                "action_summary": f"等待{label} Region 配置生效",
+            },
+            {
+                "name": f"读回{label}通信配置并确认 Region={region}",
+                "target": target,
+                "command": read_command,
+                "requires_connection": True,
+                "requires_peer": target == "peer",
+                "requires_previous_pass": True,
+                "mutating": False,
+                "change_group": group,
+                "readback_fields": fields,
+                "readback_values": {"lora.region": region},
+                "expected_read_values": {"lora.region": region},
+                "retries": 4,
+                "retry_delay_sec": 8,
+                "expect_stdout_regex_any": [r"(?i)lora\\.region"],
+                "pass_criteria": f"读回 lora.region={region}；同时刷新 Modem Preset 和 Frequency Override。",
+                "action_summary": f"读回{label}通信配置并确认 Region={region}",
+            },
+        ])
+
+    steps.extend([
+        {
+            "name": "确认两台设备的通信参数一致",
+            "target": "both",
+            "compare_config_fields": fields,
+            "requires_peer": True,
+            "requires_previous_pass": True,
+            "pass_criteria": "两台设备 Region、Modem Preset 和 Frequency Override 均一致；不以自动修改掩盖非 Region 配置差异。",
+            "action_summary": "比较两台设备最终通信配置",
+        },
+        {
+            "name": "频道 0 双向发送并核对接收",
+            "target": "both",
+            "api_dual_send": True,
+            "message_mode": "channel",
+            "channel_index": 0,
+            "primary_message": case.get("primary_message") or f"REG-{region}-PUBLIC-A2B",
+            "peer_message": case.get("peer_message") or f"REG-{region}-PUBLIC-B2A",
+            "requires_connection": True,
+            "requires_peer": True,
+            "requires_previous_pass": True,
+            "mutating": True,
+            "pass_criteria": "双方均在当前串口 API 会话收到对方的精确频道 0 文本。",
+            "action_summary": f"{region} 公共频道双向通信",
+        },
+    ])
+    adapted["steps"] = steps
+    return adapted
+
+
+def expand_regression_cases(cases):
+    return [expand_region_public_regression_case(case) for case in cases]
 
 
 
@@ -1725,7 +1856,7 @@ def custom_config_case(args):
         else:
             steps.extend(config_set_get_steps(target, label, args.config_field, args.config_value))
     return {
-        "id": "L2-CUSTOM-CONFIG",
+        "id": "MT-CUSTOM-CONFIG",
         "module": "\u914d\u7f6e\u5199\u5165",
         "source_l2_case": "\u7528\u6237\u914d\u7f6e\u5199\u5165\u4e0e\u8bfb\u56de",
         "objective": "\u6309\u7528\u6237\u9009\u62e9\u7684\u914d\u7f6e\u9879\u4e0b\u53d1\u5230\u6307\u5b9a\u8bbe\u5907\uff0c\u5e76\u8bfb\u56de\u786e\u8ba4\u662f\u5426\u751f\u6548\u3002",
@@ -1792,7 +1923,7 @@ def communication_config_case(args):
         steps.extend(config_set_many_steps("primary", "\u6d4b\u8bd5\u8bbe\u59071", pairs))
         steps.extend(config_set_many_steps("peer", "\u6d4b\u8bd5\u8bbe\u59072", pairs))
     return {
-        "id": "L2-COMM-CONFIG",
+        "id": "MT-COMM-CONFIG",
         "module": "\u901a\u4fe1\u914d\u7f6e\u4e0b\u53d1",
         "source_l2_case": "Modem Preset / Region / Frequency Override",
         "objective": "\u5c06\u4e24\u53f0\u8bbe\u5907\u7684\u901a\u4fe1\u5173\u952e\u914d\u7f6e\u8bbe\u4e3a\u4e00\u81f4\uff0c\u4e3a\u901a\u4fe1\u9a8c\u8bc1\u505a\u51c6\u5907\u3002",
@@ -1833,7 +1964,7 @@ def communication_check_case(args):
         "action_summary": "\u5bf9\u6bd4\u4e24\u53f0\u8bbe\u5907\u901a\u4fe1\u914d\u7f6e\u662f\u5426\u4e00\u81f4",
     })
     return {
-        "id": "L2-COMM-CHECK",
+        "id": "MT-COMM-CHECK",
         "module": "\u901a\u4fe1\u914d\u7f6e\u68c0\u67e5",
         "source_l2_case": "\u901a\u4fe1\u524d\u7f6e\u914d\u7f6e\u68c0\u67e5",
         "objective": "\u5728\u4e0d\u4e0b\u53d1\u914d\u7f6e\u65f6\uff0c\u5148\u68c0\u67e5\u4e24\u53f0\u8bbe\u5907\u7684\u901a\u4fe1\u5173\u952e\u914d\u7f6e\u662f\u5426\u4e00\u81f4\u3002",
@@ -2430,7 +2561,7 @@ def communication_experiment_case(args):
         # serial port free instead of using a receiver-side CLI listener.
         steps = channel_cli_steps
     return {
-        "id": "L2-COMM-EXPERIMENT",
+        "id": "MT-COMM-EXPERIMENT",
         "module": "\u901a\u4fe1\u9a8c\u8bc1",
         "source_l2_case": "\u9891\u9053\u901a\u4fe1" if message_mode == "channel" else "\u70b9\u5bf9\u70b9\u53cc\u5411\u901a\u4fe1",
         "objective": "\u5728\u4e24\u53f0\u8bbe\u5907\u901a\u4fe1\u914d\u7f6e\u4e00\u81f4\u7684\u524d\u63d0\u4e0b\uff0c\u9a8c\u8bc1\u9891\u9053\u53d1\u9001\u6216\u70b9\u5bf9\u70b9\u53cc\u5411\u6d88\u606f\u662f\u5426\u771f\u6b63\u88ab\u5bf9\u7aef\u6536\u5230\u3002",
@@ -2936,6 +3067,35 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
                         step_result["read_values"] = read_values
                         if len(read_values) == 1:
                             step_result["read_value"] = read_values[0]
+                        record_name = str(step.get("record_readback_as") or "").strip()
+                        if record_name:
+                            for item in read_values:
+                                context[f"recorded:{record_name}:{step_result['target']}:{item['field']}"] = item["value"]
+                        expected_values = step.get("expected_read_values") or {}
+                        mismatches = []
+                        for field, desired in expected_values.items():
+                            actual = context.get(context_value_key(step_result["target"], field))
+                            if not values_equivalent(field, actual, desired):
+                                mismatches.append(
+                                    f"{display_field(field)}: expected {display_value(field, desired)}, got {display_value(field, actual)}"
+                                )
+                        if mismatches:
+                            step_result["status"] = "FAIL"
+                            step_result["reason"] = "readback_value_mismatch"
+                            step_result["mismatch_summary"] = mismatches
+                        recorded_name = str(step.get("must_equal_recorded") or "").strip()
+                        if step_result["status"] == "PASS" and recorded_name:
+                            mismatches = []
+                            for item in read_values:
+                                expected = context.get(f"recorded:{recorded_name}:{step_result['target']}:{item['field']}")
+                                if expected in (None, "") or not values_equivalent(item["field"], item["value"], expected):
+                                    mismatches.append(
+                                        f"{display_field(item['field'])}: before reboot {display_value(item['field'], expected)}, got {display_value(item['field'], item['value'])}"
+                                    )
+                            if mismatches:
+                                step_result["status"] = "FAIL"
+                                step_result["reason"] = "reboot_persistence_mismatch"
+                                step_result["mismatch_summary"] = mismatches
                 if passed and step.get("capture_contact_url_as"):
                     contact_url = parse_contact_url(combined)
                     if contact_url:
@@ -2984,7 +3144,7 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
 def main():
     # 载入历史记录：某串口一旦确认「必须断言 DTR」，后续每轮都不再白等一次必然失败的尝试。
     DTR_ASSERT_PORTS.update(load_dtr_ports())
-    parser = argparse.ArgumentParser(description="Wio Tracker L2 Meshtastic CLI automation demo")
+    parser = argparse.ArgumentParser(description="Meshtastic firmware regression test executor")
     parser.add_argument("--cases", default=str(DEFAULT_CASES), help="JSON testcase file")
     parser.add_argument("--meshtastic", default=default_meshtastic_command(), help="meshtastic CLI executable")
     parser.add_argument("--port", help="test device 1 serial port, for example COM31")
@@ -3052,6 +3212,7 @@ def main():
         cases = [custom_config_case(args)]
     else:
         cases = list(selected_cases(data, args.case_filter))
+    cases = expand_regression_cases(cases)
     cases = adapt_cases_for_connections(cases, peer_connection_args, observer_connection_args)
     total_steps = sum(len(case.get("steps", [])) for case in cases)
     results = {
@@ -3088,6 +3249,7 @@ def main():
     out_path = Path(args.out) if args.out else PROJECT_ROOT / "logs" / f"meshtastic_cli_demo_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     results["finished_at"] = datetime.now().isoformat(timespec="seconds")
+    results = redact_report_value(results)
     out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
     statuses = [step.get("status") for case in results["cases"] for step in case.get("steps", [])]
     has_fail = any(status == "FAIL" for status in statuses)

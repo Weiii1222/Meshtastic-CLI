@@ -53,9 +53,10 @@
 
         <div class="mode-switch" aria-label="固件系统">
           <button id="modeMeshtastic" class="mode-button active" type="button">Meshtastic</button>
-          <button id="modeMeshCore" class="mode-button" type="button">MeshCore</button>
+          <button id="modeMeshCore" class="mode-button" type="button" disabled title="MeshCore 测试能力规划中，当前不开放执行">MeshCore（规划中）</button>
         </div>
 
+        <!-- 保留执行状态给请求载荷使用；测试台默认真实执行，不再额外占用顶部布局。 -->
         <input id="execute" type="checkbox" checked hidden>
         <input id="allowMutating" type="checkbox" checked hidden>
       </header>
@@ -406,8 +407,13 @@
                     <span>异常重试次数</span>
                     <input id="bleContinuousRetries" type="number" min="0" max="5" value="1">
                   </label>
+                  <label class="field compact">
+                    <span>长连接检查秒数</span>
+                    <input id="bleStabilitySeconds" type="number" min="30" max="180" value="60">
+                  </label>
                   <button id="startBleReceive" class="primary inline" type="button">持续接收</button>
                   <button id="startBleSend" class="primary inline" type="button">持续发送</button>
+                  <button id="runBleStability" class="secondary inline" type="button">长连接检查</button>
                   <button id="stopBleContinuous" class="secondary stop inline" type="button" disabled>停止</button>
                 </div>
                 <div id="bleContinuousLog" class="ble-continuous-log empty">启动后显示收发记录</div>

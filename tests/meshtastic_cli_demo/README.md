@@ -21,7 +21,7 @@
 # 运行环境：Windows / PowerShell
 # 执行前置操作：关闭串口工具；确认测试设备1和测试设备2 COM 号
 
-.\.venv\Scripts\python.exe .\tests\meshtastic_cli_demo\runner.py --execute --port COM7 --peer-port COM8 --case L2-CLI-001 --case L2-CLI-002
+.\.venv\Scripts\python.exe .\tests\meshtastic_cli_demo\runner.py --execute --port COM7 --peer-port COM8 --case MT-PRECHECK-CLI --case MT-PRECHECK-PAIR
 ```
 
 下发通信配置并读回检查：
@@ -75,7 +75,7 @@
 
 ```powershell
 # 运行环境：Windows / PowerShell
-# 执行前置操作：字段名可先通过 L2-CLI-004 配置字段清单确认
+# 执行前置操作：字段名可先通过 MT-EVIDENCE-CONFIG 配置字段清单确认
 
 .\.venv\Scripts\python.exe .\tests\meshtastic_cli_demo\runner.py --port COM7 --peer-port COM8 --custom-only --config-target both --config-field device.role --config-value CLIENT --allow-mutating
 ```
@@ -94,6 +94,6 @@
 - 双设备通信一致性测试不要使用 `--channel-psk random`，它会让两台设备各自生成不同 PSK。
 - `--port`、`--host`、`--ble` 同一轮只允许一种测试设备 1 连接方式。
 - `--peer-port` 用于测试设备 2 身份读取、配置读取、NodeDB 可见性检查、联系人互导和双向通信。
-- `L2-CLI-004` 和 `L2-CLI-005` 属于可选取证，不是默认业务测试项；完整配置导出超时时可把 `--timeout` 调到 120。
+- `MT-EVIDENCE-CONFIG` 和 `MT-EVIDENCE-NODEDB` 属于可选取证，不是默认业务测试项；完整配置导出超时时可把 `--timeout` 调到 120。
 - private key、PSK、password、admin key 等敏感字段会在报告中脱敏。
 - 报告默认写入 `E:\Brower-Download\seeed\Project_01_WioTrackerL2\logs`。

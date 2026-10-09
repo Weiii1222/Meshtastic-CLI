@@ -46,6 +46,7 @@ const state = {
     lastReceivedIndex: 0,
     records: [],
   },
+  bleStabilityAbort: false,
 };
 
 const MESHTASTIC_BLE_SERVICE_UUID = '6ba1b218-15a8-461f-9fa8-5dcae273eafd';
@@ -520,12 +521,14 @@ function resetModeScopedState() {
 }
 
 function setSystemMode(mode) {
-  const nextMode = mode === 'meshcore' ? 'meshcore' : 'meshtastic';
+  if (mode === 'meshcore') {
+    $('commandBox').textContent = 'MeshCore 测试能力正在规划中；当前执行台仅开放 Meshtastic 固件测试。';
+    return;
+  }
+  const nextMode = 'meshtastic';
   const changed = state.systemMode !== nextMode;
   document.body.classList.add('mode-resetting');
   state.systemMode = nextMode;
-  if ($('execute')) $('execute').checked = true;
-  if ($('allowMutating')) $('allowMutating').checked = true;
   $('modeMeshtastic')?.classList.toggle('active', nextMode === 'meshtastic');
   $('modeMeshCore')?.classList.toggle('active', nextMode === 'meshcore');
   const subtitle = $('appSubtitle');
@@ -821,6 +824,7 @@ function captureDeviceSnapshots(result) {
       if (!snapshot || !(target === 'primary' || target === 'peer')) continue;
       state.deviceSnapshots[target] = snapshot;
       const preferences = snapshot.preferences || {};
+      // --info 快照先刷新完整的设备当前状态；同一轮显式 --get 读回会在其后覆盖对应字段。
       state.deviceConfigs[target]['lora.region'] = configValue(preferences, 'lora.region');
       state.deviceConfigs[target]['lora.modem_preset'] = configValue(preferences, 'lora.modemPreset');
       state.deviceConfigs[target]['lora.use_preset'] = configValue(preferences, 'lora.usePreset');
@@ -1211,7 +1215,7 @@ function runPayload(targetType, value) {
     dest: $('dest').value.trim(),
     timeout: Number($('timeout').value || 30),
     stepGap: Number($('stepGap')?.value || 5),
-    execute: $('execute').checked,
+    execute: true,
     allowMutating: true,
     configTarget: configPlan.target,
     configKind: configPlan.kind,
@@ -1346,11 +1350,11 @@ function communicationCaseTitle(item) {
 }
 
 function publicCaseTitle(item) {
-  if (item.id === 'L2-COMM-EXPERIMENT') return communicationCaseTitle(item);
+  if (item.id === 'MT-COMM-EXPERIMENT') return communicationCaseTitle(item);
   // module 可能是英文（浏览器侧 BLE 结果曾用 "Config write"），这里统一走中文映射再兜底。
   const source = item.source_l2_case || displayModuleName(item.module) || '\u672a\u547d\u540d\u7528\u4f8b';
   return displayText(source)
-    .replace(/^L2-[A-Z0-9-]+\s*[·:：-]\s*/i, '')
+    .replace(/^MT-[A-Z0-9-]+\s*[·:：-]\s*/i, '')
     .trim();
 }
 
@@ -3300,6 +3304,7 @@ function renderBleContinuous() {
   if ($('bleContinuousFailed')) $('bleContinuousFailed').textContent = String(info.failed || 0);
   if ($('startBleSend')) $('startBleSend').disabled = info.running;
   if ($('startBleReceive')) $('startBleReceive').disabled = info.running;
+  if ($('runBleStability')) $('runBleStability').disabled = info.running || state.running;
   if ($('stopBleContinuous')) $('stopBleContinuous').disabled = !info.running;
   const log = $('bleContinuousLog');
   if (!log) return;
@@ -3504,6 +3509,102 @@ function stopBleContinuous(options = {}) {
   info.sending = false;
   if (!options.silent) pushBleContinuousRecord('info', '已停止持续收发');
   renderBleContinuous();
+}
+
+async function runBleLongConnectionStability() {
+  recoverStaleClientRun('已清理上一次未结束的 BLE 前端任务状态。');
+  if (state.running) {
+    showBleContinuousFeedback('当前已有任务在运行，请先停止或等待结束。', 'err');
+    return;
+  }
+  if ($('connectionType')?.value !== 'ble') {
+    showBleContinuousFeedback('长连接检查只适用于单设备 BLE 连接。', 'err');
+    return;
+  }
+  const transport = connectedSingleBleTransport();
+  if (!transport?.device?.gatt?.connected) {
+    showBleContinuousFeedback('请先连接一台 BLE 测试设备。', 'err');
+    return;
+  }
+  const seconds = Math.max(30, Math.min(180, Number($('bleStabilitySeconds')?.value || 60)));
+  const started = performance.now();
+  const deadline = Date.now() + seconds * 1000;
+  const samples = [];
+  const initialNodeId = String(transport.myInfo?.node_id || state.deviceNodeIds.primary || '').trim();
+  state.bleStabilityAbort = false;
+  state.activeTargetType = 'bleStability';
+  setRunning(true);
+  renderBleContinuous();
+  renderProgress({ done: 0, total: Math.ceil(seconds / 5), percent: 0, events: [] });
+  try {
+    while (Date.now() < deadline) {
+      if (state.bleStabilityAbort) {
+        return finishWebBleResult(syntheticWebBleResult('SKIPPED', {
+          caseId: 'MT-BLE-LONG-CONNECTION',
+          module: 'BLE 长连接稳定性',
+          objective: '单台设备持续保持 Web Bluetooth GATT 会话，并周期性读取身份。',
+          stepName: 'BLE 长连接检查被用户停止',
+          reason: 'user_canceled',
+          stdout: `已完成 ${samples.length} 次身份读取后由用户停止。\n`,
+          duration: Math.round((performance.now() - started) / 10) / 100,
+          command: ['web-bluetooth', 'want_config_id', 'identity-poll'],
+          passCriteria: '只有完整达到设定时长且每次身份读取成功才判定 PASS。',
+        }), 'BLE 长连接检查已停止', runPayload('bleStability'));
+      }
+      const info = await requestBleIdentity(transport, 4);
+      const nodeId = String(info?.node_id || transport.myInfo?.node_id || '').trim();
+      const connected = Boolean(transport.device?.gatt?.connected);
+      const sample = { at: new Date().toLocaleTimeString('zh-CN', { hour12: false }), nodeId, ok: Boolean(info?.ok && nodeId && connected) };
+      samples.push(sample);
+      const expectedNodeId = initialNodeId || nodeId;
+      if (!sample.ok || (expectedNodeId && nodeId !== expectedNodeId)) {
+        return finishWebBleResult(syntheticWebBleResult('FAIL', {
+          caseId: 'MT-BLE-LONG-CONNECTION',
+          module: 'BLE 长连接稳定性',
+          objective: '单台设备持续保持 Web Bluetooth GATT 会话，并周期性读取身份。',
+          stepName: `第 ${samples.length} 次身份读取`,
+          reason: sample.ok ? 'ble_identity_changed' : 'ble_identity_read_failed',
+          stdout: samples.map((item, index) => `${index + 1}. ${item.at} node=${item.nodeId || '-'} ok=${item.ok}`).join('\n') + '\n',
+          stderr: sample.ok ? `连接的节点从 ${expectedNodeId} 变为 ${nodeId}。` : 'GATT 连接或身份读取未成功。',
+          duration: Math.round((performance.now() - started) / 10) / 100,
+          command: ['web-bluetooth', 'want_config_id', 'identity-poll'],
+          passCriteria: '每次身份读取成功、GATT 始终连接且节点 ID 不变。',
+        }), 'BLE 长连接检查失败', runPayload('bleStability'));
+      }
+      pushBleContinuousRecord('info', `长连接检查 ${samples.length}: ${nodeId}`);
+      const done = Math.min(seconds, Math.round((performance.now() - started) / 1000));
+      renderProgress({ done: samples.length, total: Math.ceil(seconds / 5), percent: Math.round(done / seconds * 100), current: { event: 'web_ble_identity', step: `第 ${samples.length} 次身份读取` }, events: [] });
+      await delay(Math.min(5000, Math.max(0, deadline - Date.now())));
+    }
+    return finishWebBleResult(syntheticWebBleResult('PASS', {
+      caseId: 'MT-BLE-LONG-CONNECTION',
+      module: 'BLE 长连接稳定性',
+      objective: '单台设备持续保持 Web Bluetooth GATT 会话，并周期性读取身份。',
+      stepName: `完成 ${seconds} 秒长连接检查`,
+      reason: 'ble_long_connection_stable',
+      stdout: samples.map((item, index) => `${index + 1}. ${item.at} node=${item.nodeId} ok=${item.ok}`).join('\n') + '\n',
+      duration: Math.round((performance.now() - started) / 10) / 100,
+      command: ['web-bluetooth', 'want_config_id', 'identity-poll'],
+      passCriteria: '完整达到设定时长；每次身份读取成功、GATT 始终连接且节点 ID 不变。',
+    }), 'BLE 长连接检查通过', runPayload('bleStability'));
+  } catch (error) {
+    return finishWebBleResult(syntheticWebBleResult('FAIL', {
+      caseId: 'MT-BLE-LONG-CONNECTION',
+      module: 'BLE 长连接稳定性',
+      objective: '单台设备持续保持 Web Bluetooth GATT 会话，并周期性读取身份。',
+      stepName: `第 ${samples.length + 1} 次身份读取`,
+      reason: 'ble_long_connection_error',
+      stdout: samples.map((item, index) => `${index + 1}. ${item.at} node=${item.nodeId || '-'} ok=${item.ok}`).join('\n') + '\n',
+      stderr: `${error.name || 'Error'}: ${error.message || String(error)}`,
+      duration: Math.round((performance.now() - started) / 10) / 100,
+      command: ['web-bluetooth', 'want_config_id', 'identity-poll'],
+      passCriteria: '完整达到设定时长；每次身份读取成功、GATT 始终连接且节点 ID 不变。',
+    }), 'BLE 长连接检查失败', runPayload('bleStability'));
+  } finally {
+    state.bleStabilityAbort = false;
+    if (state.running) setRunning(false);
+    renderBleContinuous();
+  }
 }
 
 async function startBleContinuous(mode = 'send') {
@@ -4075,8 +4176,9 @@ function finishRun(data, label, payload) {
   let result = data.result || {};
   if (!result.cases?.length) result = syntheticRunResult(data);
   captureDeviceLabels(result);
-  captureDeviceConfigs(result);
   captureDeviceSnapshots(result);
+  // 配置读回来自同一轮的 --get，优先级高于可能较早的 --info 快照。
+  captureDeviceConfigs(result);
   captureChannelLabels(result);
   const hasFail = (result.cases || []).some((item) => (item.steps || []).some((step) => step.status === 'FAIL'));
   const hasSkipped = (result.cases || []).some((item) => (item.steps || []).some((step) => step.status === 'SKIPPED' || step.status === 'DRY_RUN'));
@@ -4150,8 +4252,8 @@ async function runExistingPayload(payload, label, visible = true) {
     let result = data.result || {};
     if (!result.cases?.length) result = syntheticRunResult(data);
     captureDeviceLabels(result);
-    captureDeviceConfigs(result);
     captureDeviceSnapshots(result);
+    captureDeviceConfigs(result);
     captureChannelLabels(result);
     renderReports(data.reports);
     $('commandBox').textContent = commandSummary(data);
@@ -4206,6 +4308,7 @@ async function cancelRun() {
       clearInterval(state.pollTimer);
       state.pollTimer = null;
     }
+    state.bleStabilityAbort = true;
     stopBleContinuous({ silent: true });
     $('runState').textContent = '已停止';
     $('runState').className = 'badge warn';
@@ -4377,7 +4480,7 @@ function restoreModuleGridAfterBleMode() {
 
 function syntheticWebBleResult(stepStatus, evidence) {
   const now = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-  const caseId = evidence.caseId || 'L2-COMM-EXPERIMENT';
+  const caseId = evidence.caseId || 'MT-COMM-EXPERIMENT';
   const moduleName = evidence.module || '通信验证';
   const objective = evidence.objective || '使用浏览器 Web Bluetooth GATT 数据通道发送 Meshtastic ToRadio protobuf 文本消息。';
   const target = evidence.target || 'both';
@@ -4500,7 +4603,7 @@ async function runWebBlePrecheck(payload, label) {
         suite: 'Meshtastic Web Bluetooth 设备检查',
         transport: 'web_bluetooth',
         cases: [{
-          id: 'L2-CLI-002',
+          id: 'MT-PRECHECK-PAIR',
           module: '测试前检查',
           objective: '按浏览器当前有效 BLE GATT 连接逐台读取设备身份。',
           transport: 'web_bluetooth',
@@ -4649,7 +4752,7 @@ async function runWebBlePrecheck(payload, label) {
       suite: 'Meshtastic Web Bluetooth 设备检查',
       transport: 'web_bluetooth',
       cases: [{
-        id: 'L2-CLI-002',
+        id: 'MT-PRECHECK-PAIR',
         module: '测试前检查',
         objective: '按浏览器当前已连接的 BLE GATT 设备数量读取设备身份；只连接一台时只检查一台。',
         transport: 'web_bluetooth',
@@ -4832,7 +4935,7 @@ async function runWebBleConfigWrite(payload, label) {
   setRunning(true);
   if (!roles.length) {
     const empty = syntheticWebBleResult('FAIL', {
-      caseId: 'L2-CUSTOM-CONFIG',
+      caseId: 'MT-CUSTOM-CONFIG',
       module: '\u914d\u7f6e\u5199\u5165',
       objective: '\u901a\u8fc7 Web Bluetooth ADMIN_APP \u5199\u5165 Meshtastic \u914d\u7f6e\u3002',
       stepName: '\u6ca1\u6709\u5df2\u8fde\u63a5\u7684 BLE \u76ee\u6807\u8bbe\u5907',
@@ -4852,7 +4955,7 @@ async function runWebBleConfigWrite(payload, label) {
   } catch (error) {
     const duration = Math.round((performance.now() - started) / 10) / 100;
     return finishWebBleResult(syntheticWebBleResult('FAIL', {
-      caseId: 'L2-CUSTOM-CONFIG',
+      caseId: 'MT-CUSTOM-CONFIG',
       module: '配置写入',
       objective: '通过 Web Bluetooth ADMIN_APP 写入 Meshtastic 配置。',
       stepName: 'BLE 配置下发',
@@ -4874,7 +4977,7 @@ async function runWebBleConfigWrite(payload, label) {
       suite: 'Meshtastic Web Bluetooth 配置写入',
       transport: 'web_bluetooth',
       cases: [{
-        id: 'L2-CUSTOM-CONFIG',
+        id: 'MT-CUSTOM-CONFIG',
         module: '\u914d\u7f6e\u5199\u5165',
         source_l2_case: 'BLE \u914d\u7f6e\u4e0b\u53d1\u4e0e\u8bfb\u56de\u6821\u9a8c',
         objective: '\u901a\u8fc7 Web Bluetooth ADMIN_APP \u5199\u5165 Meshtastic \u914d\u7f6e\u5e76\u6838\u5bf9\u8bfb\u56de\u503c\u3002',
@@ -4911,7 +5014,7 @@ async function runWebBleCommunication() {
   const connectedRoles = connectedBleRoles();
   if (!connectedRoles.length) {
     return finishWebBleResult(syntheticWebBleResult('FAIL', {
-      caseId: 'L2-COMM-EXPERIMENT',
+      caseId: 'MT-COMM-EXPERIMENT',
       module: modeTitle,
       objective: '使用浏览器 Web Bluetooth 数据通道发送 Meshtastic 文本消息。',
       stepName: '检查 BLE 连接',
@@ -4927,7 +5030,7 @@ async function runWebBleCommunication() {
     const selectedNode = selectedBleNodeTarget();
     if (!selectedNode?.nodeId) {
       return finishWebBleResult(syntheticWebBleResult('FAIL', {
-        caseId: 'L2-COMM-DEVICE',
+        caseId: 'MT-COMM-DEVICE',
         module: '点对点发送',
         objective: '使用单台已连接 BLE 设备向 NodeDB 指定节点发送文本消息。',
         stepName: '选择目标节点',
@@ -4941,7 +5044,7 @@ async function runWebBleCommunication() {
     }
     if (!base64ToBytes(selectedNode.publicKey)) {
       return finishWebBleResult(syntheticWebBleResult('FAIL', {
-        caseId: 'L2-COMM-DEVICE',
+        caseId: 'MT-COMM-DEVICE',
         module: '点对点发送',
         objective: '使用单台已连接 BLE 设备向 NodeDB 指定节点发送文本消息。',
         stepName: `检查 ${selectedNode.label} 公钥`,
@@ -4964,7 +5067,7 @@ async function runWebBleCommunication() {
       const duration = Math.round((performance.now() - started) / 10) / 100;
       renderProgress({ done: 1, total: 1, percent: 100, current: { event: 'web_ble_end', status: 'PASS' }, events: [] });
       return finishWebBleResult(syntheticWebBleResult('PASS', {
-        caseId: 'L2-COMM-DEVICE',
+        caseId: 'MT-COMM-DEVICE',
         module: '点对点发送',
         objective: '使用单台已连接 BLE 设备向 NodeDB 指定节点发送文本消息。',
         stepName: `${displayTarget(role)} 发给 ${selectedNode.label}`,
@@ -4989,7 +5092,7 @@ async function runWebBleCommunication() {
       const duration = Math.round((performance.now() - started) / 10) / 100;
       renderProgress({ done: 1, total: 1, percent: 100, current: { event: 'web_ble_error', status: 'FAIL' }, events: [] });
       return finishWebBleResult(syntheticWebBleResult('FAIL', {
-        caseId: 'L2-COMM-DEVICE',
+        caseId: 'MT-COMM-DEVICE',
         module: '点对点发送',
         objective: '使用单台已连接 BLE 设备向 NodeDB 指定节点发送文本消息。',
         stepName: `${displayTarget(role)} 发给 ${selectedNode.label}`,
@@ -5022,7 +5125,7 @@ async function runWebBleCommunication() {
       const duration = Math.round((performance.now() - started) / 10) / 100;
       renderProgress({ done: 1, total: 1, percent: 100, current: { event: 'web_ble_end', status: 'PASS' }, events: [] });
       return finishWebBleResult(syntheticWebBleResult('PASS', {
-        caseId: 'L2-COMM-CHANNEL',
+        caseId: 'MT-COMM-CHANNEL',
         module: '频道通信',
         objective: '使用单台已连接 BLE 设备向指定 Meshtastic 频道发送文本消息。',
         stepName: `${displayTarget(role)} 发送到频道 ${channel}`,
@@ -5048,7 +5151,7 @@ async function runWebBleCommunication() {
       const duration = Math.round((performance.now() - started) / 10) / 100;
       renderProgress({ done: 1, total: 1, percent: 100, current: { event: 'web_ble_error', status: 'FAIL' }, events: [] });
       return finishWebBleResult(syntheticWebBleResult('FAIL', {
-        caseId: 'L2-COMM-CHANNEL',
+        caseId: 'MT-COMM-CHANNEL',
         module: '频道通信',
         objective: '使用单台已连接 BLE 设备向指定 Meshtastic 频道发送文本消息。',
         stepName: `${displayTarget(role)} 发送到频道 ${channel}`,
@@ -5121,7 +5224,7 @@ async function runWebBleCommunication() {
       `${displayTarget('peer')} -> ${peerTarget}: ${peerMessage}; packet=${peerPacket}; received=${primaryReceived}`,
     ].join('\n') + '\n';
     const evidence = {
-      caseId: mode === 'device' ? 'L2-COMM-DEVICE' : 'L2-COMM-CHANNEL',
+      caseId: mode === 'device' ? 'MT-COMM-DEVICE' : 'MT-COMM-CHANNEL',
       module: modeTitle,
       objective: mode === 'device'
         ? '使用两台已连接 BLE 设备互发 Meshtastic 点对点私信。'
@@ -5178,7 +5281,7 @@ function runWebBleCommunicationNeedsPeer() {
 }
 
 function runWebBleConfigUnsupported(targetType = 'communicationExperiment') {
-  const caseId = targetType === 'customConfig' ? 'L2-CUSTOM-CONFIG' : 'L2-COMM-EXPERIMENT';
+  const caseId = targetType === 'customConfig' ? 'MT-CUSTOM-CONFIG' : 'MT-COMM-EXPERIMENT';
   const moduleName = targetType === 'customConfig' ? '配置写入' : '通信验证';
   const objective = targetType === 'customConfig'
     ? '浏览器 Web Bluetooth 当前只实现身份读取和文本发送，尚未实现配置 Admin protobuf 写入与读回。'
@@ -5211,7 +5314,7 @@ async function runCommunication() {
     try {
       if (!hasBrowserBleTransport()) {
         await finishWebBleResult(syntheticWebBleResult('FAIL', {
-          caseId: 'L2-COMM-EXPERIMENT',
+          caseId: 'MT-COMM-EXPERIMENT',
           module: '通信验证',
           objective: '使用浏览器 Web Bluetooth 数据通道发送 Meshtastic 文本消息。',
           stepName: '检查 BLE 连接',
@@ -5227,7 +5330,7 @@ async function runCommunication() {
         const configOk = await applyBleCommunicationConfigIfNeeded();
         if (!configOk) {
           const failData = syntheticWebBleResult('FAIL', {
-            caseId: 'L2-COMM-CONFIG',
+            caseId: 'MT-COMM-CONFIG',
             module: '通信配置',
             objective: '发送消息前通过 Web Bluetooth 下发所选通信配置。',
             stepName: 'BLE 通信配置下发',
@@ -5245,7 +5348,7 @@ async function runCommunication() {
       return;
     } catch (error) {
       await finishWebBleResult(syntheticWebBleResult('FAIL', {
-        caseId: 'L2-COMM-EXPERIMENT',
+        caseId: 'MT-COMM-EXPERIMENT',
         module: '通信验证',
         objective: '使用浏览器 Web Bluetooth 数据通道发送 Meshtastic 文本消息。',
         stepName: 'Web BLE 通信执行',
@@ -5632,6 +5735,7 @@ bind('runContactExchange', 'click', () => runTarget('contactExchange'));
 bind('runExperiment', 'click', runCommunication);
 bind('startBleReceive', 'click', () => startBleContinuous('receive'));
 bind('startBleSend', 'click', () => startBleContinuous('send'));
+bind('runBleStability', 'click', runBleLongConnectionStability);
 bind('stopBleContinuous', 'click', stopBleContinuous);
 bind('clearBleContinuousLog', 'click', clearBleContinuousLog);
 bind('stopRun', 'click', cancelRun);

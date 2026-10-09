@@ -1,3 +1,14 @@
+## 2026-10-09 补充：Meshtastic 回归配置读回与 SIP 发布材料
+
+- 平台定位保持为 **Meshtastic 固件测试执行台**；Wio Tracker L2 仅是当前试点测试设备，MeshCore 保持“规划中”，不作为已支持能力展示。
+- 修复配置页显示覆盖：真实报告证明 `8e5c` 已从 `lora.override_frequency: 915.0` 写回 `906.875`，但页面此前先采集 `--get` 再用较早的 `--info` 快照覆盖，因而错误显示为 `0`。现改为先应用快照、再以同轮显式 `--get` 读回覆盖对应字段。
+- US 与 EU_868 公共频道回归增加声明式 Region 修正流：先读取两台设备的 Region/Modem Preset/Frequency Override；仅在 Region 不符时写入目标 Region，等待并读回；随后比较三项最终配置，再执行频道 0 双向通信。该流不自动修改 Modem Preset、Frequency Override 或频道 PSK，避免以写配置掩盖通信前置条件不一致。
+- Dashboard 顶部恢复为仅保留 Meshtastic / MeshCore（规划中）切换；移除“真实执行”和“允许改配置/发消息”可见控件，Dashboard 请求固定为真实执行并允许写操作。直接运行 `runner.py` 仍默认 dry-run，需显式 `--execute --allow-mutating` 才会碰设备。
+- 新增 `docs/SIP_提效案例_Meshtastic固件测试执行台.md`：以详细解决方案为主体，覆盖三个界面、技术实现、适用边界、扩展方向、量化口径和对应配图占位；访问限制与仓库链接置于末尾。新增 `docs/Meshtastic固件测试执行台_本地运行指南.md`，README 已链接该指南，便于代码推送后由其他同事在 Windows 本地部署与 dry-run 验证。
+- SIP 案例的第三个界面已按实际页面修正为串口日志实时监听（选择串口/波特率、开始或停止监听、页面实时显示与本地日志落盘），不再将其描述为 BLE 稳定性界面。部署说明、访问限制和“平台仍处于迭代优化阶段，可能存在未发现使用问题与 bug”的风险提示已合并至解决方案第六点“其他”；案例正文不展开部署命令，仅给出目标 GitHub 仓库地址。
+- README 已由 392 行的说明集合收敛为平台定位、能力范围、最短启动路径、文档入口、项目结构、测试项、边界与验证；完整部署、操作方法和常见问题统一维护在 `docs/Meshtastic固件测试执行台_本地运行指南.md`，避免首页与专用文档重复。
+- 已验证：`py_compile runner.py server.py`、Node `--check app.js`、Frequency Override 解析样例（`915.0`）和两个区域回归展开检查均通过；两条区域回归干跑共 20 步通过结构检查。尚未在真实硬件上复测页面显示与 Region 自动修正。
+
 ## 2026-09-24 补充：BLE 单设备持续收发交互与前端任务状态修复
 - 当前优先级继续聚焦 Meshtastic BLE 单设备链路；MeshCore 仍先搁置，串口通信路径不做无关改动。
 - 本轮修复：BLE 持续收发卡片新增频道选择、目标节点选择和发送内容输入，持续发送可按频道或 NodeDB 中的指定节点发送；日志支持 INFO/TX/RX/ERR 分类记录、清空和自动滚动到底部。
@@ -1683,3 +1694,10 @@ P2（需要多台设备或专用环境）
 - **新增 `docs/AI应用案例提案_Mesh固件测试控制台.md`**：面向 HR 审核，含 300 字摘要、案例一句话、提案背景、技术基础（官方生态表）、AI 与人分工表、可量化成果、AI 应用边界与规范、可复制性与推广建议、后续计划。
 - **SIP 提效案例同步**：标题与背景改为「人工设备操作 → 自动化测试项」，补「基于官方生态开发」亮点与架构说明，成效表按「人工操作 / 平台执行」对照，附数据口径补官方依赖版本。
 - **仓库命名**：评估结论为需要改名（原名 `Meshtastic-CLI` 易被误认为官方 CLI）。已选定 **`meshtastic-test-platform`**，README 内三处引用（仓库名、clone 地址、`cd` 目录）已按新名写好；GitHub 侧需在仓库 Settings → Repository name 改名（旧地址会自动重定向），本地 remote 待改名完成后切换。
+## 2026-10-09 补充：Meshtastic 回归执行台定位与首批通信回归
+- 平台定位修正为「Meshtastic 固件测试执行台（回归验证试点）」。Wio Tracker L2 仅是当前试点测试设备，执行用例 ID 统一改为 `MT-*`，不再把 L2 写入底层用例标识。
+- MeshCore 保持后续规划：前端入口禁用，服务端收到 `systemMode=meshcore` 会明确拒绝，不再被展示为已支持执行能力。
+- BLE 明确只支持一台同类 Meshtastic 设备；新增 `MT-BLE-LONG-CONNECTION` 前端长连接检查（30–180 秒、约每 5 秒轻量身份读取）。只有 GATT 持续连接且 node ID 不变时才 PASS；它不覆盖手机 App 配对或双机 BLE 通信。
+- 新增 6 条「串口通信回归」：US 公共频道、EU_868 公共频道、跨 Region 隔离、私有频道、PSK 隔离、点对点最终 ACK 与软重启角色持久化。Region/PSK 由测试人员按前置条件配置，本轮回归不擅自改写；负向隔离在监听窗口内收到精确文本即 FAIL。
+- 执行安全修复：页面默认不勾选「真实执行」和「允许改配置/发消息」；报告输出统一脱敏 private key、PSK、密码和 BLE PIN，避免原始 CLI/BLE 输出落盘泄露。
+- 已验证：`node --check tests\meshtastic_cli_dashboard\app.js`、`python -m py_compile tests\meshtastic_cli_demo\runner.py tests\meshtastic_cli_dashboard\server.py`、15 条/101 步 JSON 语料解析、2 条新增回归 dry-run、MeshCore 拒绝和脱敏单元检查均通过。未连接真实串口或 BLE 设备，未做实机 PASS 声明。

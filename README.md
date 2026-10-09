@@ -1,389 +1,99 @@
-# Meshtastic 固件自动化测试平台
+# Meshtastic 固件测试执行台
 
-> **界面名称**：Mesh 固件测试控制台　|　**仓库**：meshtastic-test-platform
->
-> 把 Meshtastic 固件的测试项，从「人工在设备上逐项操作、手工记录」搬到本地可视化平台：串口与蓝牙两种连接、一键执行、自动留证、结论可追溯。
->
-> **基于官方 Meshtastic 生态开发**：设备交互全部走 **官方 meshtastic Python CLI**（`meshtastic` 2.7.11，官方 meshtastic/python 仓库），配置字段与枚举对照 **官方 protobufs**，固件行为结论对照 **官方固件源码**；平台不自己实现 Mesh 协议。
+> 面向 Meshtastic 固件设备的本地测试执行台，用于把可重复、可客观判定的配置检查、通信回归和证据留存沉淀为可执行测试项。
 
-![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4)
-![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
-![Frontend](https://img.shields.io/badge/frontend-vanilla%20JS%20%2B%20CSS-F7DF1E)
-![Transport](https://img.shields.io/badge/transport-serial%20%7C%20BLE-14764F)
-![Firmware](https://img.shields.io/badge/firmware-Meshtastic-14764F)
-![Status](https://img.shields.io/badge/MeshCore-planned-A36818)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4)](#本地启动)
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)](#本地启动)
+[![Transport](https://img.shields.io/badge/transport-Serial%20%7C%20BLE-14764F)](#能力范围)
+[![Status](https://img.shields.io/badge/MeshCore-规划中-A36818)](#能力范围)
 
----
+## 平台定位
 
-## 目录
+- **Meshtastic**：当前已开放的测试执行能力。
+- **MeshCore**：仅为后续规划入口，当前不作为已支持功能。
+- **Wio Tracker L2**：当前试点设备，不是平台的设备边界。
+- **使用方式**：初次体验、手机 App 交互和复杂异常由人工验证；稳定、重复的回归项由平台执行并自动留证。
 
-- [这是什么](#这是什么)
-- [背景：从人工操作到自动化测试项](#背景从人工操作到自动化测试项)
-- [支持范围](#支持范围)
-- [基于官方生态开发（重要）](#基于官方生态开发重要)
-- [功能总览](#功能总览)
-- [串口连接能力](#串口连接能力)
-- [蓝牙（BLE）连接能力](#蓝牙ble连接能力)
-- [测试项与覆盖](#测试项与覆盖)
-- [架构](#架构)
-- [快速开始](#快速开始)
-- [使用指南](#使用指南)
-- [配置](#配置)
-- [测试项语料格式](#测试项语料格式)
-- [设计约定](#设计约定)
-- [注意事项](#注意事项)
-- [故障排查](#故障排查)
-- [开发与验证](#开发与验证)
-- [路线图](#路线图)
-- [许可](#许可)
+## 能力范围
 
----
-
-## 这是什么
-
-一个跑在本机的 Meshtastic 固件自动化测试平台。它把「设备该怎么测」沉淀成**可重复执行的测试项**，把「测完拿什么交差」沉淀成**自动生成的证据报告**：
-
-- **两种连接方式**：串口（可多台设备协同）与蓝牙 BLE（单台设备即可跑设备侧验证），都是一等能力。
-- **一批常用操作**：批量配置设备、一键建立联系人、空口监听取证、持续收发、日志实时查看。
-- **一叠可扩展的测试项**：以 JSON 描述，当前 9 条 / 79 步，覆盖测试前检查、可选取证、设备角色验证、BLE 设备验证四个模块，**测试项可以不断补充完善**。
-- **一份可追溯的报告**：每一步的命令、输出、判据、失败原因全部落盘为 JSON。
-
----
-
-## 背景：从人工操作到自动化测试项
-
-**原来的做法是纯人工测试模式**：人在设备上按键、翻菜单，逐项验证固件行为，再用文档/截图手工记录结果。这条路能走通，但成本和风险都落在人身上：
-
-| 痛点 | 具体表现 |
-| --- | --- |
-| 重复劳动多 | 同一批验证项每个固件版本都要重做一遍；不同角色、不同连接方式再各做一遍 |
-| 等待被浪费 | 改配置要等设备重启，位置/中继类验证要等广播周期，人只能干等 |
-| 证据不可追溯 | 靠截图和手抄，事后无法回答「当时读到的值是多少、有没有真的被中继」 |
-| 覆盖靠经验 | 验证项散在个人手里，换人就要重新对齐，遗漏难以发现 |
-| 上手成本高 | 参数、菜单路径、前后置条件多，新人容易做错且看不出错在哪一步 |
-
-**这个平台做的事**：把上述人工步骤拆成机器可执行的测试项。**CLI 是平台的一项执行能力（自动化入口），不是原来的测试流程** —— 使用平台的人不需要记 CLI 参数，只需要勾选测试项、看结论、判断是否符合预期。
-
-**目标**：让每一轮验证都有可信、可追溯、可复现的结论，并且把验证项沉淀成团队的资产。
-**非目标**：不做固件编译/烧录；不替代射频、天线、功耗、结构等硬件测试；只覆盖连接后可观测、可校验的部分。
-
----
-
-## 支持范围
-
-| 维度 | 现状 |
-| --- | --- |
-| 测试系统 | **Meshtastic**：已支持（本次平台的核心）<br>**MeshCore**：界面已预留模式入口，固件测试能力**暂未支持**，已纳入后续开发规划 |
-| 连接方式 | **串口**：已支持，支持被测 / 对端 / 观察者三台协同<br>**BLE**：已支持，单台设备即可跑设备侧配置验证 |
-| 设备 | 支持 Meshtastic 固件的设备。示例：**Wio Tracker L2**（ESP32-S3 + SX1262）、以及其它可被 `meshtastic` CLI / BLE 识别的 Meshtastic 节点 |
-| 运行环境 | Windows 10/11 + Python 3.10+（后端仅用标准库，前端无构建步骤） |
-
----
-
-## 基于官方生态开发（重要）
-
-平台**不自研协议、不魔改官方包**：所有设备交互都通过官方组件完成，判据语义对照官方定义。这样写的好处是可信（不依赖自研实现）、可跟随升级（官方 CLI 升级即可同步能力）、可复用（其它 Meshtastic 设备同样适用）。
-
-| 官方组件 | 版本 / 来源 | 平台如何使用 |
+| 场景 | 支持内容 | 说明 |
 | --- | --- | --- |
-| **官方 Meshtastic Python CLI** | `meshtastic` **2.7.11**（[meshtastic/python](https://github.com/meshtastic/python)） | 设备交互的**唯一执行入口**：串口与 `--ble` 两条通道都由它完成；平台不直接实现 Mesh 协议 |
-| **官方 protobuf 定义** | [meshtastic/protobufs](https://github.com/meshtastic/protobufs) | 配置字段、角色 / 区域 / 时区枚举与判据语义的对照来源 |
-| **官方固件源码** | [meshtastic/firmware](https://github.com/meshtastic/firmware) | 固件行为结论的依据（默认值、深睡逻辑、周期上报等） |
-| pyserial | 3.5（官方 CLI 依赖） | 串口枚举与 USB 详情展示 |
-| Bleak | 3.0.2（官方 CLI 依赖） | BLE 连接，由官方 CLI 的 BLE 接口驱动 |
+| 串口回归 | 多设备配置、联系人互识、角色与通信回归、原始日志监听 | 适合受控的多设备回归和问题复现 |
+| BLE 验证 | 单设备连接、配置读写与读回、持续收发、长连接检查 | 模拟用户连接设备后的链路；本机一次仅支持一台同类设备 |
+| 测试项与报告 | 按模块或单条运行、步骤级判定、JSON 报告 | 报告保留命令、读回值、输出、判据和失败原因 |
 
-**唯一的一层本地包装**：`safe_meshtastic_cli.py` 仍然调用官方 CLI 入口（`meshtastic.__main__`），只在进程内调整串口打开方式（让 DTR/RTS 不触发 Windows USB-CDC 上的 ESP32 复位）以及可选的 BLE 配对参数 —— **不改协议行为、不改动 site-packages**。
+关键原则：配置操作采用“**先读、必要时写、等待、读回**”；通信结果需有接收、ACK 或设备可见证据，不能仅以命令返回成功判定通过。
 
----
+## 本地启动
 
-## 功能总览
+完整环境准备、设备前置条件、首次验证和常见问题见 [本地运行指南](docs/Meshtastic固件测试执行台_本地运行指南.md)。以下仅保留最短启动路径。
 
-| 能力 | 串口 | BLE | 说明 |
-| --- | :---: | :---: | --- |
-| 设备扫描与连接 | ✅ | ✅ | 串口按 USB 详情区分设备；BLE 支持设备 1 / 设备 2 分别扫描、连接、重新读取、断开 |
-| 批量配置设备 | ✅ | ✅ | 一次勾选多项配置（区域、调制预设、频道、角色、时区、WiFi、GPS、蓝牙、频率覆盖…）批量下发 |
-| 一键建立联系人 | ✅ | ✅ | 让两台设备互相认识，避免后续通信验证因「互相不认识」而失败 |
-| 配置读取与写回校验 | ✅ | ✅ | 写前先读、值一致则跳过写入；写后等待再读回对比 |
-| 测试项执行 | ✅ | ✅ | 按模块 / 单条 / 全选批量运行，失败原因中文化 |
-| 空口监听取证 | ✅ | — | 观察者长时间监听，抓直收副本 / 中继副本 / `POSITION_APP` 等 |
-| 实时日志 | ✅ | ✅ | 串口日志页监听指定串口；BLE 支持持续接收 / 持续发送与页面内实时日志 |
-| 报告与证据 | ✅ | ✅ | 报告 JSON 落盘，页面可打开 / 下载，含每步命令、输出与判据 |
-| 执行保护 | ✅ | ✅ | 默认 dry-run；真实执行、写配置 / 发消息需分别二次勾选 |
+运行环境：Windows 10/11、PowerShell、Python 3.10+、Git；真实串口测试还需要设备 USB 驱动。
 
----
-
-## 串口连接能力
-
-串口是本平台覆盖最完整的通道，适合「需要多台设备配合、需要看空口行为」的验证：
-
-- **批量配置设备**：在「配置写入」里一次勾选多项配置并下发到指定设备，写前先读当前值、值一致自动跳过，写后等待再读回校验。适合量产前的整机初始化、把一批设备统一到同一套区域 / 预设 / 频道参数。
-- **一键建立联系人**：点「建立联系人」让测试设备 1 与测试设备 2 互相认识（交换 NodeDB 信息），一次性解决后续通信验证的前置条件。
-- **查看日志**：「日志」页选择日志串口 → 开始监听，实时看设备串口输出，用于复现崩溃、断言、重启等现场。
-- **空口监听取证**：展开「测试设备 3」接入观察者，长时间监听空口，抓直收副本 / 中继副本 / 位置包，用于判断「消息到底有没有被中继」这类只看单台设备无法回答的问题。
-- **覆盖测试项**：测试前检查、可选取证、设备角色验证（CLIENT / CLIENT_MUTE / TRACKER / LOST_AND_FOUND）等模块都在串口通道上执行，且**测试项可以不断补充**。
-
----
-
-## 蓝牙（BLE）连接能力
-
-BLE 是不需要 USB 线、也不受串口占用限制的通道，适合设备侧配置验证与现场快速复测：
-
-- **扫描与连接**：设备 1 / 设备 2 各自支持「扫描 BLE → 选择设备 → 连接 BLE → 重新读取 → 断开 BLE」，连接状态与设备身份在页面上直接显示；配对过程有单独的提示对话框。
-- **配置读取与写入**：与串口一致的配置项与写回校验流程，可只用一台设备完成区域、预设、频道、角色、时区等配置验证。
-- **BLE 测试项**：连接 BLE 后出现独立的「BLE 测试项」卡片（可折叠），专门承载**单台设备即可完成**的验证。示例：`L2-BLE-TZ-CHECK` 一条用例自动完成 7 个 `US/*` 时区别名的写入、重启读回与回滚，共 26 个步骤，全程只需一台设备。
-- **持续收发与实时日志**：BLE 通道支持「持续接收 / 持续发送 / 停止」，页面内实时滚动 BLE 报文，便于观察连接稳定性、丢包与重连行为。
-- **适用边界**：单台设备无法验证设备时钟精度（需要另一台设备发消息再比对收包时间戳），这类验证放在双设备通道上执行。
-
----
-
-## 测试项与覆盖
-
-测试项写在 `tests/meshtastic_cli_demo/cases_l2_demo.json`（当前 9 条用例 / 79 个步骤 / 4 个模块），**新增测试项不需要改代码**：
-
-| 用例 | 模块 | 连接 | 设备数 | 步骤 | 说明 |
-| --- | --- | --- | --- | --- | --- |
-| `L2-CLI-001` | 测试前检查 | 串口 | 1 | 1 | CLI 可用性与版本 |
-| `L2-CLI-002` | 测试前检查 | 串口 | 2 | 8 | 设备身份、公私钥、通信配置、互识关系 |
-| `L2-CLI-004` | 可选取证 | 串口 | 1 | 1 | 配置快照取证 |
-| `L2-CLI-005` | 可选取证 | 串口 | 1 | 1 | 节点信息取证 |
-| `L2-ROLE-CLIENT` | 设备角色验证 | 串口 | 3 | 11 | 写角色 + 双向消息 + 中继副本监听 |
-| `L2-ROLE-CLIENT-MUTE` | 设备角色验证 | 串口 | 3 | 11 | 验证「不转发」行为 |
-| `L2-ROLE-TRACKER` | 设备角色验证 | 串口 | 2 | 11 | 固定位置 + 角色写回 + 深睡行为取证 |
-| `L2-ROLE-LOST-FOUND` | 设备角色验证 | 串口 | 2 | 9 | 定位广播周期断言（330 s 窗口） |
-| `L2-BLE-TZ-CHECK` | BLE 设备验证 | BLE | 1 | 26 | 7 个时区别名写入 + 重启读回 + 回滚 |
-
-补充测试项的方式：复制一个 `steps` 结构 → 填命令与判据 → 放进对应模块。团队里的测试点、缺陷复现步骤、外场问题都可以按这个格式沉淀进来，**测试项越补越厚，平台本身不用改**。
-
-配套文档：`docs/` 下有覆盖矩阵、可行性评估、提效优化点、缺陷记录与产品需求规范。
-
----
-
-## 架构
-
-```text
-浏览器（本地页面：设备连接 / 测试项 / 配置写入 / 通信验证 / 执行结果 / 日志 / 报告）
-        │  JSON API
-server.py（本机 http.server，127.0.0.1:8765，提供 API + 静态文件）
-        │ 子进程
-runner.py（测试项执行引擎：读语料、跑步骤、判期望、出报告）
-        │
-safe_meshtastic_cli.py（CLI 包装：关闭 DTR 复位）→ 官方 meshtastic CLI 2.7.11（串口 / --ble）
-```
-
-```text
-├── start_dashboard.ps1              一键启动（先释放 8765 端口再拉起服务）
-├── README.md                        本文件
-├── DESIGN.md / PRODUCT.md / SNAPSHOT.md
-├── docs/                            需求、覆盖矩阵、缺陷记录、提效案例
-├── logs/                            JSON 报告与日志（默认落盘目录，已 gitignore）
-├── project-background/              项目背景资料
-└── tests/
-    ├── meshtastic_cli_demo/
-    │   ├── runner.py                测试项执行引擎
-    │   ├── safe_meshtastic_cli.py   CLI 包装（DTR 不复位）
-    │   ├── cases_l2_demo.json       测试项语料
-    │   └── build_coverage_matrix.py 覆盖矩阵生成
-    ├── meshtastic_cli_dashboard/
-    │   ├── server.py                本地 HTTP API + 静态文件服务
-    │   ├── index.html / app.js / styles.css
-    │   └── README.md                控制台自身的说明
-    └── meshcore_demo/               MeshCore 预留执行器（暂未支持，规划中）
-```
-
----
-
-## 快速开始
-
-**运行环境**：Windows 10/11、Python 3.10+、已装 USB 串口驱动（只用 BLE 时可不装）；测试设备建议 2 台，跑转发类角色测试项需要 3 台（第三台为观察者，可选）。
+执行前置操作：关闭占用设备的手机 App、串口终端或其他 Meshtastic 工具。
 
 ```powershell
-git clone https://github.com/Weiii1222/meshtastic-test-platform.git
-cd meshtastic-test-platform
-
-# 1) 安装官方 meshtastic CLI（平台的唯一设备交互入口，当前 2.7.11）
+# 克隆项目并安装官方 Meshtastic Python CLI
+git clone https://github.com/Weiii1222/Meshtastic-test-platform.git
+cd Meshtastic-test-platform
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install meshtastic
 
-# 2) 一条命令启动控制台（会先关闭占用 8765 端口的旧服务）
+# 启动后访问 http://127.0.0.1:8765
 .\start_dashboard.ps1
 ```
 
-打开 <http://127.0.0.1:8765> 即可。页面是静态文件，**改动前端后按 Ctrl+F5 强刷**；改过 `server.py` 需要重启服务。
+预期：页面顶部显示“服务正常”。真实设备测试前，先扫描串口或连接单台 BLE 设备，再运行“测试前检查”。
 
----
+## 文档入口
 
-## 使用指南
+| 文档 | 用途 |
+| --- | --- |
+| [本地运行指南](docs/Meshtastic固件测试执行台_本地运行指南.md) | 完整部署、首次验证与常见问题 |
+| [控制台使用说明](tests/meshtastic_cli_dashboard/README.md) | 页面流程、报告与共享日志配置 |
+| [自动化执行器说明](tests/meshtastic_cli_demo/README.md) | 命令行执行、dry-run 与测试项结构 |
+| [自动化覆盖矩阵](docs/Wio_Tracker_L2_Meshtastic_CLI_自动化覆盖矩阵.md) | 当前测试项与人工测试边界 |
+| [SIP 提效案例](docs/SIP_提效案例_Meshtastic固件测试执行台.md) | 平台定位、提效方案与素材建议 |
 
-两条通道的入口不同，后续步骤一致。
+## 项目结构
 
-**串口流程**
-
-1. 点「扫描串口」，按 USB 详情把设备对应到「测试设备 1 / 测试设备 2」；需要观察者时点「+」展开「测试设备 3」并选择串口。
-2. 点「运行前置检查」，确认设备身份、关键配置与互识关系（读到的节点 ID 会用于后续设备名展示）。
-3. 需要统一参数时，在「配置写入」里勾选多项配置批量下发。
-4. 需要通信时先点「建立联系人」，再在「通信验证」里勾选本轮要下发的配置并填写消息。
-5. 在「测试项」里按模块或单条勾选要执行的测试项，点「运行选中」。
-
-**BLE 流程**
-
-1. 点「扫描 BLE」，为「测试设备 1」（需要双设备时还有「测试设备 2」）选择设备并点「连接 BLE」；必要时用「重新读取」刷新设备信息。
-2. 连接成功后出现「BLE 测试项」卡片，勾选要执行的测试项并点「运行选中」。
-3. 需要观察连接稳定性时用「持续接收 / 持续发送」，页面内实时日志会滚动显示报文。
-4. 需要改配置时同样使用「配置写入」（目标设备选择当前 BLE 已连接设备）。
-
-**公共步骤**
-
-- 勾选「真实执行」；要写配置或发消息时再勾选「允许改配置 / 发消息」。
-- 在「执行结果」看每步结论，「命令与证据」看原始输出，失败步骤会给出中文原因与处理建议。
-- 在「报告记录」里打开或下载 JSON 报告（含每步命令、stdout/stderr、判据、监听副本统计）。
-
----
-
-## 配置
-
-### 启动与环境变量
-
-| 项 | 默认值 | 说明 |
-| --- | --- | --- |
-| 服务端口 | `8765` | `start_dashboard.ps1` 启动前会释放该端口 |
-| 报告目录 | `<repo>\logs` | 用 `MESHTASTIC_DASHBOARD_LOG_DIR` 指向共享目录可多人汇总 |
-| CLI 路径 | `<repo>\.venv\Scripts\meshtastic.exe` | 由执行引擎自动解析虚拟环境 |
-| 健康检查 | `GET /api/health` | 返回实际 `logsDir`、服务状态 |
-
-```powershell
-# 把报告写到共享目录（团队汇总用）
-$env:MESHTASTIC_DASHBOARD_LOG_DIR = "D:\MeshFirmware_TestReports"
-.\start_dashboard.ps1
+```text
+.
+├── start_dashboard.ps1                 本地服务启动脚本
+├── docs/                               使用指南、覆盖矩阵、SIP 案例与需求资料
+├── logs/                               本地运行报告和日志（默认不提交）
+└── tests/
+    ├── meshtastic_cli_dashboard/       浏览器控制台：页面、API 与报告展示
+    ├── meshtastic_cli_demo/            测试项执行器、JSON 用例与 CLI 包装
+    └── meshcore_demo/                  MeshCore 预留目录，暂未支持执行
 ```
 
-### 可写配置项
+## 测试项
 
-用户名称、区域、调制预设、频道（索引 / 名称 / PSK）、设备角色、时区、WiFi、GPS 开关、蓝牙开关、设备语言、频率覆盖。
-枚举值读回时会转成人可读文本（如 `lora.region=1` → `US`、`device.role=0` → `CLIENT`）；`Language` 在部分 CLI 版本未暴露可写字段，页面保留为人工项提示。
+测试项定义位于 [`tests/meshtastic_cli_demo/cases_l2_demo.json`](tests/meshtastic_cli_demo/cases_l2_demo.json)。当前覆盖测试前检查、可选取证、设备角色、串口通信回归和 BLE 单设备验证。新增可重复测试点时，优先补充 JSON 测试项和判据，而不是修改页面逻辑。
 
-### 运行参数
+命令行默认 **dry-run**，只有显式传入 `--execute --allow-mutating` 才会写设备配置或发送消息；Dashboard 则按受控流程执行设备操作。
 
-| 参数 | 作用 |
-| --- | --- |
-| 真实执行 | 关闭时只做 dry-run，打印将要执行的命令 |
-| 允许改配置 / 发消息 | 写操作的二次开关，未勾选时写类步骤会被拦截 |
-| 写入后等待时长（秒） | 写配置后等待设备重启/重新枚举的时间 |
-| 收信等待秒数 | 通信验证的收信窗口 |
-| 观察者（测试设备 3） | 展开后接入，角色类测试项优先用它做长时间监听 |
+## 边界与状态
 
----
+- 不替代射频、天线、功耗、结构等硬件专项测试。
+- BLE 长连接检查验证单设备与本机浏览器的会话保持，不等同于双设备 BLE 通信或手机 App 端到端体验。
+- 平台仍处于迭代优化阶段，可能存在尚未发现的使用问题与 bug。异常结论应保留报告与日志，并由测试人员人工复核。
 
-## 测试项语料格式
+## 验证
 
-```json
-{
-  "id": "L2-BLE-TZ-CHECK",
-  "module": "BLE 设备验证",
-  "connection": "ble",
-  "required_devices": 1,
-  "device_note": "单台设备走 BLE：逐个写入时区别名并重启读回。",
-  "steps": [
-    {
-      "name": "写入时区别名",
-      "target": "primary",
-      "command": ["--set", "device.tzdef", "US/Pacific"],
-      "mutating": true,
-      "requires_connection": true,
-      "readback_fields": ["device.tzdef"],
-      "readback_values": ["US/Pacific"],
-      "pass_criteria": "写命令成功，重启后读回 device.tzdef 仍为 US/Pacific。"
-    }
-  ]
-}
-```
-
-常用步骤字段：
-
-| 字段 | 含义 |
-| --- | --- |
-| `target` | `primary`（设备 1）/ `peer`（设备 2）/ `observer`（设备 3） |
-| `requires_connection` / `requires_peer` / `requires_observer` | 依赖裁剪：不满足时自动跳过并在报告里标记 |
-| `mutating` | 写操作，未开「允许改配置」时会被拦截 |
-| `readback_fields` / `readback_value(s)` | 写后读回校验的字段与期望值 |
-| `expect_stdout_regex` / `_any` / `fail_on_regex` | 输出期望（全部命中 / 任一命中 / 命中即失败） |
-| `listen_send` + `listen_expect_relayed` / `listen_expect_portnum` | 发一条消息并监听空口副本，判断是否被中继、端口号是否符合预期 |
-| `listen_evidence_only` | 只记录证据、不作为 PASS/FAIL 判据 |
-| `sleep_sec` / `timeout` / `retries` / `retry_delay_sec` | 等待、超时与重试（重试只作用于命令失败，不掩盖判据不符） |
-| `conditional_set_pairs` / `change_group` | 条件写：只在需要变化时才下发，减少无意义写操作 |
-
----
-
-## 设计约定
-
-- **默认安全**：不勾「真实执行」只做 dry-run；写操作还要再勾「允许改配置 / 发消息」。
-- **不制造假通过**：命令成功 ≠ 测试项通过。读回值不符、监听窗口里没看到预期副本都判失败并写明原因；证据型步骤只记录流量，不参与判定。
-- **先读后写**：写配置前先读当前值，一致则跳过写入，减少对设备的扰动。
-- **失败要能定位**：失败原因写成人话。例如串口打不开时提示「该角色发完位置后会按 `position_broadcast_secs` 深睡，睡眠期间 USB-CDC 断电、串口会消失，等设备唤醒后重跑」。
-- **CLI 包装**：`safe_meshtastic_cli.py` 关闭 DTR 复位，避免每次开串口都把设备打回 boot 导致用例随机失败。
-
----
-
-## 注意事项
-
-1. **深睡类角色会掉串口**：部分角色（如定位优先）发完位置后会按 `position.position_broadcast_secs`（固件默认 3600 s）进入深睡，期间 USB-CDC 与射频一起断电。
-   → 测试项不写小这个值（那等于改变被测行为），位置包只作证据；要观测周期上报需等一个完整唤醒周期或手动唤醒设备。
-2. **`telemetry.device_update_interval = 2147483647` 是哨兵值**：等于固件里的 `MAX_INTERVAL`（`INT32_MAX`），语义是「不做周期性上报」，虽然单位是秒但不能按真实间隔理解。
-3. **BLE 单设备无法验证设备时钟精度**：BLE 通道只断言配置写入与重启读回；时间精度需要另一台设备发消息再比对收包时间戳。
-4. **区域/预设一致 ≠ 频道密钥一致**：监听类测试项观测不到包时，先核对两台设备的频道 PSK，再怀疑距离与天线。
-5. **写配置后的等待要覆盖重启**：默认等待 10 s，设备重启慢时请调大，否则会读到旧值或直接失败。
-6. **报告含原始输出**：JSON 报告保留 CLI 的 stdout/stderr 与公私钥相关字段，外发前请自行脱敏。
-
----
-
-## 故障排查
-
-| 现象 | 可能原因 | 处理 |
-| --- | --- | --- |
-| 页面提示「后端服务没有响应」 | 服务没起或端口被占 | 在项目目录执行 `.\start_dashboard.ps1`，再强刷页面 |
-| 串口列表里少了一台设备 | 设备深睡 / 线松 / 掉电 | 唤醒或重新上电；确认端口号是否变化（重新枚举后可能是新 `COMx`） |
-| 写配置成功但读回是旧值 | 等待时间不足，设备还在重启 | 调大「写入后等待时长（秒）」后重跑 |
-| BLE 连接中途失败 | 设备重启后 BLE 掉线 | 重新扫描并连接同一台设备再跑；报告里保留原始错误 |
-| BLE 扫描不到设备 | 设备已被其它主机/手机占用 | 断开其它连接后重新扫描 |
-| 监听窗口内看不到包 | 频道 PSK / 距离 / 天线 / 角色不该转发 | 先核对 PSK 与区域预设，再看是否属于预期的「不转发」行为 |
-| 中文显示成乱码 | 控制台编码 | 服务端已固定 UTF-8；检查终端与页面是否都按 UTF-8 显示 |
-
----
-
-## 开发与验证
+运行环境：Windows / PowerShell；在项目根目录执行，已创建 `.venv`。
 
 ```powershell
-# 语法自检
+# 语法检查：无输出即通过
 .\.venv\Scripts\python.exe -m py_compile tests\meshtastic_cli_demo\runner.py tests\meshtastic_cli_dashboard\server.py
-node --check tests\meshtastic_cli_dashboard\app.js
 
-# 干跑一条测试项（不碰设备：不勾真实执行时只打印命令）
-.\.venv\Scripts\python.exe tests\meshtastic_cli_demo\runner.py `
-  --cases tests\meshtastic_cli_demo\cases_l2_demo.json `
-  --port COM7 --peer-port COM8 --case L2-ROLE-TRACKER
+# 不操作设备的 dry-run
+.\.venv\Scripts\python.exe tests\meshtastic_cli_demo\runner.py --port COM7 --peer-port COM8 --case MT-PRECHECK-CLI
 ```
 
-约定：
+预期：dry-run 仅生成计划或报告，不代表真实硬件通过。
 
-- 前端是静态文件，改动后强刷即可；`server.py` 改动需要重启服务。
-- 提交信息用「动词 + 对象」的短句，一次提交只做一件事。
-- 测试项语料的改动要能回答一个问题：**这条判据为什么足以证明行为正确？** 不足以证明的就降级为证据记录。
+## 仓库
 
----
-
-## 路线图
-
-- [ ] 补齐真机回归：BLE 时区测试项、角色类测试项在真机上完整跑通
-- [ ] **支持 MeshCore**：界面入口已预留，先补齐配置读写与测试项执行能力
-- [ ] 测试项继续扩充：把团队测试点、缺陷复现步骤、外场问题按语料格式持续沉淀
-- [ ] 把语料跑成 CI 化回归（每周定时 + 版本发布前触发）
-- [ ] 多产品复用：把设备名、端口、语料抽成产品配置，换产品只换配置
-- [ ] 报告汇总：把共享目录里的 JSON 报告汇总成趋势（通过率、失败原因分布）
-
----
-
-## 许可
-
-本仓库为公司内部测试工具，目前未声明开源许可（默认保留所有权利）。如需对外开源，请补充一份 `LICENSE`。
-
-CLI 依赖 [meshtastic](https://github.com/meshtastic/python) 官方 Python 包，固件行为结论参考 [meshtastic/firmware](https://github.com/meshtastic/firmware) 与 [meshtastic/protobufs](https://github.com/meshtastic/protobufs)。
+[Weiii1222/Meshtastic-test-platform](https://github.com/Weiii1222/Meshtastic-test-platform)

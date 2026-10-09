@@ -29,6 +29,32 @@ RUN_PROCESSES = {}
 RUNS_LOCK = threading.Lock()
 SERIAL_LOGS = {}
 SERIAL_LOG_LOCK = threading.Lock()
+SENSITIVE_KEYS = ("private_key", "privateKey", "preshared_key", "psk", "wifi_psk", "password", "admin_key", "fixed_pin", "fixedPin", "secret", "complete_url")
+
+
+def redact_report_value(value):
+    """Redact secrets from browser-generated or timeout reports before persistence."""
+    if isinstance(value, str):
+        redacted = value
+        for key in SENSITIVE_KEYS:
+            redacted = re.sub(
+                rf"({re.escape(key)}\s*[:=]\s*)(['\"]?)[^\s,'\"\r\n]+(\2)",
+                rf"\1\2<redacted>\3",
+                redacted,
+                flags=re.IGNORECASE,
+            )
+            redacted = re.sub(
+                rf"({re.escape(key)}['\"]?\s*:\s*['\"])[^'\"]+(['\"])",
+                rf"\1<redacted>\2",
+                redacted,
+                flags=re.IGNORECASE,
+            )
+        return redacted
+    if isinstance(value, list):
+        return [redact_report_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: redact_report_value(item) for key, item in value.items()}
+    return value
 
 
 def load_cases():
@@ -96,7 +122,7 @@ def write_timeout_report(report_path, command, normalized, summary, job_timeout)
     """
     current = summary.get("current") or {}
     step_name = str(current.get("step") or "运行未完成（任务超时被终止）")
-    case_id = str(current.get("case_id") or "L2-CLI-TIMEOUT")
+    case_id = str(current.get("case_id") or "MT-TIMEOUT")
     body = {
         "suite": "Meshtastic CLI 自动化提效 Demo",
         "status": "timeout",
@@ -140,7 +166,7 @@ def write_timeout_report(report_path, command, normalized, summary, job_timeout)
     }
     try:
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+        report_path.write_text(json.dumps(redact_report_value(body), ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError:
         return None
     return body
@@ -158,7 +184,7 @@ def save_client_report(payload):
     body["connection_type"] = payload.get("connectionType") or "ble"
     body["generated_by"] = "dashboard_browser"
     body["saved_at"] = datetime.now().isoformat(timespec="seconds")
-    report.write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+    report.write_text(json.dumps(redact_report_value(body), ensure_ascii=False, indent=2), encoding="utf-8")
     return {
         "report": str(report),
         "reportName": report.name,
@@ -482,7 +508,9 @@ def selected_case_step_count(cases, selected, has_peer):
 
 def sanitize_run_request(payload):
     system_mode = str(payload.get("systemMode") or "meshtastic").strip().lower()
-    if system_mode not in ("meshtastic", "meshcore"):
+    if system_mode == "meshcore":
+        raise ValueError("MeshCore 测试能力规划中，当前执行台不开放执行。")
+    if system_mode != "meshtastic":
         system_mode = "meshtastic"
     cases = load_cases()["cases"]
     all_case_ids = {case["id"] for case in cases}
@@ -503,18 +531,18 @@ def sanitize_run_request(payload):
         for module in payload.get("modules") or []:
             selected.extend(module_map.get(module, []))
     elif target_type == "customConfig":
-        selected = ["L2-CUSTOM-CONFIG"]
+        selected = ["MT-CUSTOM-CONFIG"]
     elif target_type == "communicationConfig":
-        selected = ["L2-COMM-CONFIG"]
+        selected = ["MT-COMM-CONFIG"]
     elif target_type == "communicationCheck":
-        selected = ["L2-COMM-CHECK"]
+        selected = ["MT-COMM-CHECK"]
     elif target_type == "communicationExperiment":
-        selected = ["L2-COMM-EXPERIMENT"]
+        selected = ["MT-COMM-EXPERIMENT"]
     elif target_type == "contactExchange":
         selected = ["MESHTASTIC-CONTACT-EXCHANGE"]
     else:
         selected = [case["id"] for case in cases]
-    dynamic_case_ids = {"L2-CUSTOM-CONFIG", "L2-COMM-CONFIG", "L2-COMM-CHECK", "L2-COMM-EXPERIMENT", "MESHTASTIC-CONTACT-EXCHANGE"}
+    dynamic_case_ids = {"MT-CUSTOM-CONFIG", "MT-COMM-CONFIG", "MT-COMM-CHECK", "MT-COMM-EXPERIMENT", "MESHTASTIC-CONTACT-EXCHANGE"}
     selected = [case_id for case_id in selected if case_id in all_case_ids or case_id in dynamic_case_ids]
 
     connection_type = payload.get("connectionType", "none")

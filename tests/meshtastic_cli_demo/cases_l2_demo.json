@@ -1,9 +1,9 @@
 {
-  "suite": "Meshtastic CLI \u81ea\u52a8\u5316\u63d0\u6548 Demo",
-  "version": "0.9",
+  "suite": "Meshtastic 固件测试执行台回归用例",
+  "version": "0.10",
   "cases": [
     {
-      "id": "L2-CLI-001",
+      "id": "MT-PRECHECK-CLI",
       "module": "\u6d4b\u8bd5\u524d\u68c0\u67e5",
       "source_l2_case": "\u672c\u673a CLI \u73af\u5883\u68c0\u67e5",
       "objective": "\u786e\u8ba4\u672c\u673a Meshtastic CLI \u5df2\u5b89\u88c5\uff0c\u5e76\u80fd\u88ab\u81ea\u52a8\u5316\u6267\u884c\u5668\u8c03\u7528\u3002",
@@ -30,7 +30,7 @@
       "device_note": "\u53ea\u8fde \u6d4b\u8bd5\u8bbe\u59071\uff08\u88ab\u6d4b\u8bbe\u5907\uff09\uff1a\u8bfb\u53d6\u8282\u70b9 ID\u3001\u8bbe\u5907\u540d\u3001\u901a\u4fe1\u5173\u952e\u914d\u7f6e\u548c\u9891\u9053\u5feb\u7167\u3002"
     },
     {
-      "id": "L2-CLI-002",
+      "id": "MT-PRECHECK-PAIR",
       "module": "\u6d4b\u8bd5\u524d\u68c0\u67e5",
       "source_l2_case": "\u53cc\u8bbe\u5907\u8eab\u4efd / \u901a\u4fe1\u5173\u952e\u914d\u7f6e / NodeDB \u53ef\u89c1\u6027",
       "objective": "\u4e00\u6b21\u5b8c\u6210\u4e24\u53f0\u6d4b\u8bd5\u8bbe\u5907\u7684\u8eab\u4efd\u3001\u901a\u4fe1\u5173\u952e\u914d\u7f6e\u548c NodeDB \u5bf9\u7aef\u53ef\u89c1\u6027\u68c0\u67e5\u3002",
@@ -221,7 +221,7 @@
       "device_note": "\u6d4b\u8bd5\u8bbe\u59071\uff08\u88ab\u6d4b\uff09+ \u6d4b\u8bd5\u8bbe\u59072\uff08\u5bf9\u7aef\uff09\uff1a\u53cc\u8bbe\u5907\u4e92\u53d1\u6d88\u606f\u505a\u70b9\u5bf9\u70b9\u6536\u53d1\u9a8c\u8bc1\u3002"
     },
     {
-      "id": "L2-CLI-004",
+      "id": "MT-EVIDENCE-CONFIG",
       "module": "\u53ef\u9009\u53d6\u8bc1",
       "source_l2_case": "\u914d\u7f6e\u9879\u53ef\u8bfb\u6027 / \u5b57\u6bb5\u540d\u786e\u8ba4",
       "objective": "\u5217\u51fa\u5f53\u524d CLI/\u56fa\u4ef6\u652f\u6301\u7684\u914d\u7f6e\u5b57\u6bb5\uff0c\u7528\u4e8e\u786e\u8ba4\u53ef\u5199\u914d\u7f6e\u9879\u7684\u51c6\u786e\u5b57\u6bb5\u540d\u3002",
@@ -254,7 +254,7 @@
       "device_note": "\u53ea\u8fde \u6d4b\u8bd5\u8bbe\u59071\uff1a\u53ea\u8bfb\u68c0\u67e5\uff08\u4e0d\u6539\u914d\u7f6e\uff09\uff0c\u5355\u53f0\u5373\u53ef\u3002"
     },
     {
-      "id": "L2-CLI-005",
+      "id": "MT-EVIDENCE-NODEDB",
       "module": "\u53ef\u9009\u53d6\u8bc1",
       "source_l2_case": "\u914d\u7f6e\u5feb\u7167 / \u56de\u5f52\u524d\u540e\u5bf9\u6bd4",
       "objective": "\u5bfc\u51fa\u8bbe\u5907\u5b8c\u6574\u914d\u7f6e\uff0c\u4f5c\u4e3a\u6d4b\u8bd5\u524d\u540e\u5bf9\u6bd4\u548c\u5931\u8d25\u590d\u76d8\u8bc1\u636e\u3002",
@@ -283,7 +283,7 @@
       "device_note": "\u53ea\u8fde \u6d4b\u8bd5\u8bbe\u59071\uff1a\u53d6\u8bc1\u7c7b\u8bfb\u53d6\uff0c\u5355\u53f0\u5373\u53ef\u3002"
     },
     {
-      "id": "L2-ROLE-CLIENT",
+      "id": "MT-ROLE-CLIENT",
       "module": "\u8bbe\u5907\u89d2\u8272\u9a8c\u8bc1",
       "display_name": "CLIENT\uff08\u901a\u7528\u7ec8\u7aef\uff09",
       "source_l2_case": "\u88ab\u6d4b\u8bbe\u5907 = \u6d4b\u8bd5\u8bbe\u59071\uff1b\u89d2\u8272 = CLIENT\uff08\u901a\u7528\u7ec8\u7aef\uff09",
@@ -516,7 +516,7 @@
       "device_note": "\u5fc5\u987b 3 \u53f0\uff1a\u6d4b\u8bd5\u8bbe\u59071\uff08\u88ab\u6d4b\u89d2\u8272\u8bbe\u5907\uff09 + \u6d4b\u8bd5\u8bbe\u59072\uff08\u53d1\u9001\u65b9\uff09+ \u6d4b\u8bd5\u8bbe\u59073\uff08\u89c2\u5bdf\u8005\uff09\uff0c\u70b9\u300c+\u300d\u63a5\u5165\u3002"
     },
     {
-      "id": "L2-ROLE-CLIENT-MUTE",
+      "id": "MT-ROLE-CLIENT-MUTE",
       "module": "\u8bbe\u5907\u89d2\u8272\u9a8c\u8bc1",
       "display_name": "CLIENT_MUTE\uff08\u4e0d\u8f6c\u53d1\u7ec8\u7aef\uff09",
       "source_l2_case": "\u88ab\u6d4b\u8bbe\u5907 = \u6d4b\u8bd5\u8bbe\u59071\uff1b\u89d2\u8272 = CLIENT_MUTE\uff08\u4e0d\u8f6c\u53d1\u7ec8\u7aef\uff09",
@@ -749,7 +749,7 @@
       "device_note": "\u5fc5\u987b 3 \u53f0\uff1a\u6d4b\u8bd5\u8bbe\u59071\uff08\u88ab\u6d4b\u89d2\u8272\u8bbe\u5907\uff09 + \u6d4b\u8bd5\u8bbe\u59072\uff08\u53d1\u9001\u65b9\uff09+ \u6d4b\u8bd5\u8bbe\u59073\uff08\u89c2\u5bdf\u8005\uff09\uff0c\u70b9\u300c+\u300d\u63a5\u5165\u3002"
     },
     {
-      "id": "L2-ROLE-TRACKER",
+      "id": "MT-ROLE-TRACKER",
       "module": "\u8bbe\u5907\u89d2\u8272\u9a8c\u8bc1",
       "display_name": "TRACKER\uff08\u5b9a\u4f4d\u4f18\u5148\uff09",
       "source_l2_case": "\u88ab\u6d4b\u8bbe\u5907 = \u6d4b\u8bd5\u8bbe\u59071\uff1b\u89d2\u8272 = TRACKER\uff08\u5b9a\u4f4d\u4f18\u5148\uff09",
@@ -978,7 +978,7 @@
       "device_note": "\u6700\u5c11 2 \u53f0\uff1a\u6d4b\u8bd5\u8bbe\u59071\uff08\u88ab\u6d4b\u89d2\u8272\u8bbe\u5907\uff09\uff08\u6df1\u7761\u65f6\u4e32\u53e3\u4f1a\u6389\u7ebf\uff09+ \u6d4b\u8bd5\u8bbe\u59072\uff08\u5f53\u76d1\u542c\u7aef\uff09\u3002\u63a5\u5165\u6d4b\u8bd5\u8bbe\u59073\uff08\u89c2\u5bdf\u8005\uff09 \u65f6\u4f18\u5148\u7528\u5b83\u505a\u76d1\u542c\uff08\u70b9\u300c+\u300d\u63a5\u5165\uff09\u3002"
     },
     {
-      "id": "L2-ROLE-LOST-FOUND",
+      "id": "MT-ROLE-LOST-FOUND",
       "module": "\u8bbe\u5907\u89d2\u8272\u9a8c\u8bc1",
       "display_name": "LOST_AND_FOUND\uff08\u4e22\u5931\u627e\u56de\uff09",
       "source_l2_case": "\u88ab\u6d4b\u8bbe\u5907 = \u6d4b\u8bd5\u8bbe\u59071\uff1b\u89d2\u8272 = LOST_AND_FOUND\uff08\u4e22\u5931\u627e\u56de\uff09",
@@ -1167,7 +1167,7 @@
       "device_note": "\u6700\u5c11 2 \u53f0\uff1a\u6d4b\u8bd5\u8bbe\u59071\uff08\u88ab\u6d4b\u89d2\u8272\u8bbe\u5907\uff09 + \u6d4b\u8bd5\u8bbe\u59072\uff08\u5f53\u76d1\u542c\u7aef\uff09\u3002\u63a5\u5165\u6d4b\u8bd5\u8bbe\u59073\uff08\u89c2\u5bdf\u8005\uff09 \u65f6\u4f18\u5148\u7528\u5b83\u505a\u76d1\u542c\uff08\u70b9\u300c+\u300d\u63a5\u5165\uff09\u3002"
     },
     {
-      "id": "L2-BLE-TZ-CHECK",
+      "id": "MT-BLE-TZ-CHECK",
       "module": "BLE \u8bbe\u5907\u9a8c\u8bc1",
       "connection": "ble",
       "display_name": "\u65f6\u533a\u9a8c\u8bc1\uff087 \u4e2a US/* \u522b\u540d\uff09",
@@ -1631,6 +1631,371 @@
       ],
       "required_devices": 1,
       "device_note": "\u53ea\u8fde \u6d4b\u8bd5\u8bbe\u59071\uff08\u8d70\u84dd\u7259 BLE\uff09\uff1a\u9010\u6761\u5199\u65f6\u533a\u5e76\u91cd\u542f\u8bfb\u56de\uff0c\u5355\u53f0\u8bbe\u5907\u5373\u53ef\u5b8c\u6210\u3002"
+    },
+    {
+      "id": "MT-SERIAL-REGION-US-PUBLIC",
+      "region_regression_target": "US",
+      "module": "串口通信回归",
+      "source_l2_case": "US 区域公共频道双向通信",
+      "objective": "读取两台设备通信配置；Region 非 US 时仅自动修正 Region 并读回，再验证公共频道双向文本。",
+      "test_data": "预期 Region=US。自动修正只作用于 lora.region；Modem Preset、Frequency Override 和频道 0 PSK 仍作为显式一致性前置条件，不会被本用例改写。",
+      "pass_meaning": "PASS 表示两端 Region 均读回 US、最终通信参数一致，且本轮串口 API 会话中双方都收到对方的精确文本。",
+      "failure_help": "若 Region 修正后仍失败，核对 Modem Preset、Frequency Override、频道 0 PSK、天线和物理距离；报告会保留修正前后读回值。",
+      "risk": "mutating",
+      "required_devices": 2,
+      "steps": [
+        {
+          "name": "读取测试设备 1 Region，必须为 US",
+          "target": "primary",
+          "command": ["--get", "lora.region"],
+          "requires_connection": true,
+          "mutating": false,
+          "readback_fields": ["lora.region"],
+          "expected_read_values": {"lora.region": "US"},
+          "expect_stdout_regex_any": ["(?i)lora\\.region"],
+          "pass_criteria": "读回 lora.region=US。",
+          "action_summary": "读取测试设备 1 Region"
+        },
+        {
+          "name": "读取测试设备 2 Region，必须为 US",
+          "target": "peer",
+          "command": ["--get", "lora.region"],
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_previous_pass": true,
+          "mutating": false,
+          "readback_fields": ["lora.region"],
+          "expected_read_values": {"lora.region": "US"},
+          "expect_stdout_regex_any": ["(?i)lora\\.region"],
+          "pass_criteria": "读回 lora.region=US。",
+          "action_summary": "读取测试设备 2 Region"
+        },
+        {
+          "name": "频道 0 双向发送并核对接收",
+          "target": "both",
+          "api_dual_send": true,
+          "message_mode": "channel",
+          "channel_index": 0,
+          "primary_message": "REG-US-PUBLIC-A2B-20261009",
+          "peer_message": "REG-US-PUBLIC-B2A-20261009",
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_previous_pass": true,
+          "mutating": true,
+          "pass_criteria": "两端均在当前串口 API 会话收到对方的精确频道 0 文本。",
+          "action_summary": "US 公共频道双向通信"
+        }
+      ]
+    },
+    {
+      "id": "MT-SERIAL-REGION-EU868-PUBLIC",
+      "region_regression_target": "EU_868",
+      "module": "串口通信回归",
+      "source_l2_case": "EU_868 区域公共频道双向通信",
+      "objective": "读取两台设备通信配置；Region 非 EU_868 时仅自动修正 Region 并读回，再验证公共频道双向文本。",
+      "test_data": "预期 Region=EU_868。自动修正只作用于 lora.region；Modem Preset、Frequency Override 和频道 0 PSK 仍作为显式一致性前置条件，不会被本用例改写。",
+      "pass_meaning": "PASS 表示两端 Region 均读回 EU_868、最终通信参数一致，且本轮串口 API 会话中双方都收到对方的精确文本。",
+      "failure_help": "若 Region 修正后仍失败，核对合法区域配置、Modem Preset、Frequency Override、频道 0 PSK、天线和物理距离；报告会保留修正前后读回值。",
+      "risk": "mutating",
+      "required_devices": 2,
+      "steps": [
+        {
+          "name": "读取测试设备 1 Region，必须为 EU_868",
+          "target": "primary",
+          "command": ["--get", "lora.region"],
+          "requires_connection": true,
+          "mutating": false,
+          "readback_fields": ["lora.region"],
+          "expected_read_values": {"lora.region": "EU_868"},
+          "expect_stdout_regex_any": ["(?i)lora\\.region"],
+          "pass_criteria": "读回 lora.region=EU_868。",
+          "action_summary": "读取测试设备 1 Region"
+        },
+        {
+          "name": "读取测试设备 2 Region，必须为 EU_868",
+          "target": "peer",
+          "command": ["--get", "lora.region"],
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_previous_pass": true,
+          "mutating": false,
+          "readback_fields": ["lora.region"],
+          "expected_read_values": {"lora.region": "EU_868"},
+          "expect_stdout_regex_any": ["(?i)lora\\.region"],
+          "pass_criteria": "读回 lora.region=EU_868。",
+          "action_summary": "读取测试设备 2 Region"
+        },
+        {
+          "name": "频道 0 双向发送并核对接收",
+          "target": "both",
+          "api_dual_send": true,
+          "message_mode": "channel",
+          "channel_index": 0,
+          "primary_message": "REG-EU868-PUBLIC-A2B-20261009",
+          "peer_message": "REG-EU868-PUBLIC-B2A-20261009",
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_previous_pass": true,
+          "mutating": true,
+          "pass_criteria": "两端均在当前串口 API 会话收到对方的精确频道 0 文本。",
+          "action_summary": "EU_868 公共频道双向通信"
+        }
+      ]
+    },
+    {
+      "id": "MT-SERIAL-REGION-ISOLATION",
+      "module": "串口通信回归",
+      "source_l2_case": "跨 Region 通信隔离",
+      "objective": "验证 US 发送端与 EU_868 监听端在同一测试窗口内不会收到彼此的公共频道文本。",
+      "test_data": "前置条件：测试设备 1=US，测试设备 2=EU_868；频道索引相同但不得为了本用例改 Region 或 PSK。",
+      "pass_meaning": "PASS 表示两个 Region 都被读回确认，且 EU_868 监听端在 20 秒窗口内没有收到该精确文本。",
+      "failure_help": "若收到文本，立即停止外场运行并检查设备 Region、频率覆盖和是否接入了意外的网关/中继。",
+      "risk": "mutating",
+      "required_devices": 2,
+      "steps": [
+        {
+          "name": "读取发送端 Region，必须为 US",
+          "target": "primary",
+          "command": ["--get", "lora.region"],
+          "requires_connection": true,
+          "mutating": false,
+          "readback_fields": ["lora.region"],
+          "expected_read_values": {"lora.region": "US"},
+          "expect_stdout_regex_any": ["(?i)lora\\.region"],
+          "pass_criteria": "发送端读回 US。",
+          "action_summary": "确认发送端 Region"
+        },
+        {
+          "name": "读取监听端 Region，必须为 EU_868",
+          "target": "peer",
+          "command": ["--get", "lora.region"],
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_previous_pass": true,
+          "mutating": false,
+          "readback_fields": ["lora.region"],
+          "expected_read_values": {"lora.region": "EU_868"},
+          "expect_stdout_regex_any": ["(?i)lora\\.region"],
+          "pass_criteria": "监听端读回 EU_868。",
+          "action_summary": "确认监听端 Region"
+        },
+        {
+          "name": "发送跨区隔离标记，监听端不得收到",
+          "target": "primary",
+          "command": ["--sendtext", "REGION-ISOLATION-20261009"],
+          "message": "REGION-ISOLATION-20261009",
+          "channel_index": 0,
+          "listen_send": true,
+          "listen_target": "peer",
+          "expect_no_receive": true,
+          "receive_wait": 20,
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_previous_pass": true,
+          "mutating": true,
+          "pass_criteria": "EU_868 监听端在 20 秒内未收到精确文本。",
+          "action_summary": "验证跨 Region 通信隔离"
+        }
+      ]
+    },
+    {
+      "id": "MT-SERIAL-PRIVATE-CHANNEL",
+      "module": "串口通信回归",
+      "source_l2_case": "私有频道双向通信",
+      "objective": "在已人工配置为相同私有频道 1 的两台设备之间，验证双向频道文本可见。",
+      "test_data": "前置条件：测试设备 1/2 的频道 1 均已启用，频道名和 PSK 相同；本用例不会读取或输出 PSK。",
+      "pass_meaning": "PASS 表示当前串口 API 会话中双方在频道 1 均收到对方的精确文本。",
+      "failure_help": "核对频道 1 是否启用、名称与 PSK 是否一致，以及 Region/Modem 参数是否一致。",
+      "risk": "mutating",
+      "required_devices": 2,
+      "steps": [
+        {
+          "name": "读取测试设备 1 私有频道 1 摘要",
+          "target": "primary",
+          "command": ["--ch-index", "1", "--info"],
+          "requires_connection": true,
+          "mutating": false,
+          "expect_stdout_regex_any": ["(?i)channel|settings"],
+          "pass_criteria": "可读取频道 1 摘要，不输出 PSK。",
+          "action_summary": "读取测试设备 1 私有频道摘要"
+        },
+        {
+          "name": "读取测试设备 2 私有频道 1 摘要",
+          "target": "peer",
+          "command": ["--ch-index", "1", "--info"],
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_previous_pass": true,
+          "mutating": false,
+          "expect_stdout_regex_any": ["(?i)channel|settings"],
+          "pass_criteria": "可读取频道 1 摘要，不输出 PSK。",
+          "action_summary": "读取测试设备 2 私有频道摘要"
+        },
+        {
+          "name": "私有频道 1 双向发送并核对接收",
+          "target": "both",
+          "api_dual_send": true,
+          "message_mode": "channel",
+          "channel_index": 1,
+          "primary_message": "REG-PRIVATE-A2B-20261009",
+          "peer_message": "REG-PRIVATE-B2A-20261009",
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_previous_pass": true,
+          "mutating": true,
+          "pass_criteria": "两端均在当前串口 API 会话收到对方的精确频道 1 文本。",
+          "action_summary": "私有频道双向通信"
+        }
+      ]
+    },
+    {
+      "id": "MT-SERIAL-PSK-ISOLATION",
+      "module": "串口通信回归",
+      "source_l2_case": "私有频道 PSK 隔离",
+      "objective": "验证不同 PSK 的观察者不能接收测试设备 1 发往私有频道 1 的精确文本。",
+      "test_data": "前置条件：测试设备 1/2 的频道 1 PSK 相同；观察者的频道 1 PSK 不同，三台设备 Region/Modem 参数一致。",
+      "pass_meaning": "PASS 表示观察者在 20 秒窗口内未收到精确私有频道文本。",
+      "failure_help": "若观察者收到文本，检查频道索引、PSK、观察者是否误入相同频道，及监听输出是否来自错误 COM 口。",
+      "risk": "mutating",
+      "required_devices": 3,
+      "requires_observer": true,
+      "steps": [
+        {
+          "name": "向私有频道 1 发送隔离标记，观察者不得收到",
+          "target": "primary",
+          "command": ["--sendtext", "PSK-ISOLATION-20261009"],
+          "message": "PSK-ISOLATION-20261009",
+          "channel_index": 1,
+          "listen_send": true,
+          "listen_target": "observer",
+          "expect_no_receive": true,
+          "receive_wait": 20,
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_observer": true,
+          "mutating": true,
+          "pass_criteria": "不同 PSK 的观察者在 20 秒内未收到精确文本。",
+          "action_summary": "验证私有频道 PSK 隔离"
+        }
+      ]
+    },
+    {
+      "id": "MT-SERIAL-DIRECT-ACK-PERSISTENCE",
+      "module": "串口通信回归",
+      "source_l2_case": "点对点 ACK 与软重启持久化",
+      "objective": "验证点对点双向消息的最终 ACK 和接收证据，并确认软重启后两台设备的角色值保持不变。",
+      "test_data": "前置条件：两台设备已互见于 NodeDB；本用例只读取并比较既有角色，不改角色。",
+      "pass_meaning": "PASS 表示双方最终 ACK=ack、均收到精确私信，且两台设备软重启后的 device.role 与重启前一致。",
+      "failure_help": "ACK 失败先看链路、NodeDB 和目标节点；持久化失败则保留重启前后读回证据并按固件缺陷处理。",
+      "risk": "mutating",
+      "required_devices": 2,
+      "steps": [
+        {
+          "name": "记录测试设备 1 当前角色",
+          "target": "primary",
+          "command": ["--get", "device.role"],
+          "requires_connection": true,
+          "mutating": false,
+          "readback_fields": ["device.role"],
+          "record_readback_as": "pre_reboot_role",
+          "expect_stdout_regex_any": ["(?i)device\\.role"],
+          "pass_criteria": "成功读取并记录重启前 device.role。",
+          "action_summary": "记录测试设备 1 角色"
+        },
+        {
+          "name": "记录测试设备 2 当前角色",
+          "target": "peer",
+          "command": ["--get", "device.role"],
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_previous_pass": true,
+          "mutating": false,
+          "readback_fields": ["device.role"],
+          "record_readback_as": "pre_reboot_role",
+          "expect_stdout_regex_any": ["(?i)device\\.role"],
+          "pass_criteria": "成功读取并记录重启前 device.role。",
+          "action_summary": "记录测试设备 2 角色"
+        },
+        {
+          "name": "点对点双向发送并确认最终 ACK",
+          "target": "both",
+          "api_dual_send": true,
+          "message_mode": "device",
+          "channel_index": 0,
+          "primary_message": "REG-DIRECT-ACK-A2B-20261009",
+          "peer_message": "REG-DIRECT-ACK-B2A-20261009",
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_previous_pass": true,
+          "mutating": true,
+          "pass_criteria": "双方最终 ACK=ack，且均收到对方精确私信；本用例记录最终 ACK，不把内部重传次数伪装成已验证指标。",
+          "action_summary": "验证点对点 ACK 与双向接收"
+        },
+        {
+          "name": "软重启测试设备 1",
+          "target": "primary",
+          "command": ["--reboot"],
+          "requires_connection": true,
+          "requires_previous_pass": true,
+          "mutating": true,
+          "expect_stdout_regex_any": ["(?i)reboot|connected|done"],
+          "pass_criteria": "重启命令已被 CLI 接受。",
+          "action_summary": "软重启测试设备 1"
+        },
+        {
+          "name": "等待测试设备 1 重启",
+          "sleep_sec": "reboot_wait",
+          "requires_previous_pass": true,
+          "pass_criteria": "等待重启窗口结束。",
+          "action_summary": "等待测试设备 1 重启"
+        },
+        {
+          "name": "软重启测试设备 2",
+          "target": "peer",
+          "command": ["--reboot"],
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_previous_pass": true,
+          "mutating": true,
+          "expect_stdout_regex_any": ["(?i)reboot|connected|done"],
+          "pass_criteria": "重启命令已被 CLI 接受。",
+          "action_summary": "软重启测试设备 2"
+        },
+        {
+          "name": "等待测试设备 2 重启",
+          "sleep_sec": "reboot_wait",
+          "requires_previous_pass": true,
+          "pass_criteria": "等待重启窗口结束。",
+          "action_summary": "等待测试设备 2 重启"
+        },
+        {
+          "name": "读回测试设备 1 角色，必须与重启前一致",
+          "target": "primary",
+          "command": ["--get", "device.role"],
+          "requires_connection": true,
+          "requires_previous_pass": true,
+          "mutating": false,
+          "readback_fields": ["device.role"],
+          "must_equal_recorded": "pre_reboot_role",
+          "expect_stdout_regex_any": ["(?i)device\\.role"],
+          "pass_criteria": "重启后 device.role 与重启前读回值一致。",
+          "action_summary": "验证测试设备 1 重启持久化"
+        },
+        {
+          "name": "读回测试设备 2 角色，必须与重启前一致",
+          "target": "peer",
+          "command": ["--get", "device.role"],
+          "requires_connection": true,
+          "requires_peer": true,
+          "requires_previous_pass": true,
+          "mutating": false,
+          "readback_fields": ["device.role"],
+          "must_equal_recorded": "pre_reboot_role",
+          "expect_stdout_regex_any": ["(?i)device\\.role"],
+          "pass_criteria": "重启后 device.role 与重启前读回值一致。",
+          "action_summary": "验证测试设备 2 重启持久化"
+        }
+      ]
     }
   ]
 }
