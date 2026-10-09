@@ -53,7 +53,6 @@ python -m venv .venv
 | [控制台使用说明](tests/meshtastic_cli_dashboard/README.md) | 页面流程、报告与共享日志配置 |
 | [自动化执行器说明](tests/meshtastic_cli_demo/README.md) | 命令行执行、dry-run 与测试项结构 |
 | [自动化覆盖矩阵](docs/Wio_Tracker_L2_Meshtastic_CLI_自动化覆盖矩阵.md) | 当前测试项与人工测试边界 |
-| [SIP 提效案例](docs/SIP_提效案例_Meshtastic固件测试执行台.md) | 平台定位、提效方案与素材建议 |
 
 ## 项目结构
 
