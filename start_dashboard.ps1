@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-$Server = Join-Path $ProjectRoot "tests\meshtastic_cli_dashboard\server.py"
+$Server = Join-Path $ProjectRoot "src\dashboard\server.py"
 $Port = 8765
 
 if (-not (Test-Path $Python)) {

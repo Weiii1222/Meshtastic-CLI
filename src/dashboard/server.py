@@ -14,13 +14,12 @@ from urllib.parse import parse_qs, quote, urlparse
 
 DASHBOARD_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = DASHBOARD_DIR.parents[1]
-DEMO_DIR = PROJECT_ROOT / "tests" / "meshtastic_cli_demo"
-CASES_PATH = DEMO_DIR / "cases_l2_demo.json"
-RUNNER_PATH = DEMO_DIR / "runner.py"
-MESHCORE_DEMO_DIR = PROJECT_ROOT / "tests" / "meshcore_demo"
-MESHCORE_RUNNER_PATH = MESHCORE_DEMO_DIR / "runner.py"
-SAFE_MESHTASTIC_CLI = DEMO_DIR / "safe_meshtastic_cli.py"
-AUTOMATION_COVERAGE_PATH = PROJECT_ROOT / "project-background" / "requirements" / "automation_coverage_matrix.json"
+EXECUTOR_DIR = PROJECT_ROOT / "src" / "executor"
+RUNNER_PATH = EXECUTOR_DIR / "runner.py"
+SAFE_MESHTASTIC_CLI = EXECUTOR_DIR / "safe_meshtastic_cli.py"
+# Public distribution does not bundle product-specific test cases. Teams can
+# point this variable at their own local case catalogue when they need it.
+CASE_CATALOG_PATH = Path(os.environ["MESHTASTIC_CASES_PATH"]).expanduser() if os.environ.get("MESHTASTIC_CASES_PATH") else None
 LOGS_DIR = Path(os.environ.get("MESHTASTIC_DASHBOARD_LOG_DIR") or PROJECT_ROOT / "logs").resolve()
 LOCAL_MESHTASTIC = PROJECT_ROOT / ".venv" / "Scripts" / "meshtastic.exe"
 LOCAL_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
@@ -58,7 +57,16 @@ def redact_report_value(value):
 
 
 def load_cases():
-    data = json.loads(CASES_PATH.read_text(encoding="utf-8"))
+    if not CASE_CATALOG_PATH or not CASE_CATALOG_PATH.is_file():
+        return {
+            "suite": "Meshtastic firmware test console",
+            "version": "external",
+            "modules": {},
+            "cases": [],
+            "catalogAvailable": False,
+            "notice": "公开仓库不附带设备专属测试项。可配置 MESHTASTIC_CASES_PATH 使用团队本地用例库。",
+        }
+    data = json.loads(CASE_CATALOG_PATH.read_text(encoding="utf-8"))
     modules = {}
     for case in data.get("cases", []):
         module = case.get("module") or "未分组"
@@ -68,31 +76,12 @@ def load_cases():
         "version": data.get("version"),
         "modules": modules,
         "cases": data.get("cases", []),
+        "catalogAvailable": True,
     }
 
 
 def load_coverage():
-    if not AUTOMATION_COVERAGE_PATH.exists():
-        return {"available": False, "summary": {}, "byFunction": {}, "sample": []}
-    matrix = json.loads(AUTOMATION_COVERAGE_PATH.read_text(encoding="utf-8"))
-    summary = {"auto": 0, "assisted": 0, "manual": 0}
-    by_function = {}
-    for item in matrix:
-        coverage = item.get("coverage") or "manual"
-        summary[coverage] = summary.get(coverage, 0) + 1
-        function = item.get("function") or "未分组"
-        by_function.setdefault(function, {"auto": 0, "assisted": 0, "manual": 0, "total": 0})
-        by_function[function][coverage] = by_function[function].get(coverage, 0) + 1
-        by_function[function]["total"] += 1
-    sample = [item for item in matrix if item.get("coverage") == "auto"][:8]
-    return {
-        "available": True,
-        "total": len(matrix),
-        "summary": summary,
-        "byFunction": by_function,
-        "sample": sample,
-        "markdown": str(PROJECT_ROOT / "docs" / "Wio_Tracker_L2_Meshtastic_CLI_自动化覆盖矩阵.md"),
-    }
+    return {"available": False, "summary": {}, "byFunction": {}, "sample": []}
 
 
 def list_reports(limit=12):
@@ -544,6 +533,9 @@ def sanitize_run_request(payload):
         selected = [case["id"] for case in cases]
     dynamic_case_ids = {"MT-CUSTOM-CONFIG", "MT-COMM-CONFIG", "MT-COMM-CHECK", "MT-COMM-EXPERIMENT", "MESHTASTIC-CONTACT-EXCHANGE"}
     selected = [case_id for case_id in selected if case_id in all_case_ids or case_id in dynamic_case_ids]
+    static_targets = {"case", "cases", "module", "modules", "suite"}
+    if target_type in static_targets and not selected:
+        raise ValueError("当前公开仓库未附带设备专属测试项。请配置 MESHTASTIC_CASES_PATH，或使用配置写入、通信验证和联系人互识功能。")
 
     connection_type = payload.get("connectionType", "none")
     primary_port = str(payload.get("primaryPort") or "").strip()
@@ -572,7 +564,7 @@ def sanitize_run_request(payload):
         peer_ble = ""
 
     runner_python = str(LOCAL_PYTHON) if LOCAL_PYTHON.exists() else sys.executable
-    runner_path = MESHCORE_RUNNER_PATH if system_mode == "meshcore" else RUNNER_PATH
+    runner_path = RUNNER_PATH
     if not runner_path.exists():
         raise ValueError(f"{system_mode} runner 不存在：{runner_path}")
     args = [runner_python, "-B", str(runner_path)]
@@ -1077,7 +1069,7 @@ def retry_single_step(payload):
             "cases": [{
                 "id": f"STEP-RETRY-{str(payload.get('caseId') or 'CASE')}",
                 "module": "单步重试",
-                "source_l2_case": payload.get("caseTitle") or "失败步骤重试",
+                "source_case": payload.get("caseTitle") or "失败步骤重试",
                 "objective": "仅重新执行上一轮失败的非写入步骤。",
                 "steps": [retry_step],
             }],

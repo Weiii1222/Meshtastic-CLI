@@ -1,6 +1,7 @@
 const state = {
   modules: {},
   cases: [],
+  caseCatalogNotice: '',
   ports: [],
   bleDevices: [],
   runs: [],
@@ -958,7 +959,7 @@ function snapshotRows(snapshot) {
 
 
 // 用例 hover 提示：说明这条用例需要连接几台测试设备、分别干什么。
-// required_devices / device_note 在语料里（cases_l2_demo.json）维护，语料缺字段时不编造台数。
+// required_devices / device_note 由团队本地用例库维护；语料缺字段时不编造台数。
 function caseDeviceTip(item) {
   const count = Number(item && item.required_devices) || 0;
   const note = String((item && item.device_note) || '').trim();
@@ -972,7 +973,7 @@ function buildCaseTip(item) {
     ? item.zones.map((zone) => (typeof zone === 'string' ? zone : zone.name)).filter(Boolean)
     : [];
   const zoneText = zones.length ? `覆盖 ${zones.length} 个时区：${zones.join('、')}` : '';
-  return [item.id, item.source_l2_case, caseDeviceTip(item), zoneText].filter(Boolean).join(' · ');
+  return [item.id, item.source_case, caseDeviceTip(item), zoneText].filter(Boolean).join(' · ');
 }
 
 // 切换串口 / 蓝牙后必须清掉上一台设备的配置快照：否则切到蓝牙还会显示串口连接时读到的设备配置。
@@ -1342,17 +1343,17 @@ function communicationCaseTitle(item) {
   const testData = String(item.test_data || '');
   const steps = item.steps || [];
   const stepMode = steps.find((step) => step.message_mode)?.message_mode || '';
-  const sourceTitle = String(item.source_l2_case || item.objective || '');
+  const sourceTitle = String(item.source_case || item.objective || '');
   const evidence = `${testData} ${stepMode} ${sourceTitle} ${steps.map((step) => step.name || '').join(' ')}`;
   if (/message_mode=device|\bdevice\b|点对点|对端设备|发给/.test(evidence)) return '点对点双向通信';
   if (/message_mode=channel|\bchannel\b|频道|发到频道/.test(evidence)) return '频道通信';
-  return displayText(item.source_l2_case || '通信验证');
+  return displayText(item.source_case || '通信验证');
 }
 
 function publicCaseTitle(item) {
   if (item.id === 'MT-COMM-EXPERIMENT') return communicationCaseTitle(item);
   // module 可能是英文（浏览器侧 BLE 结果曾用 "Config write"），这里统一走中文映射再兜底。
-  const source = item.source_l2_case || displayModuleName(item.module) || '\u672a\u547d\u540d\u7528\u4f8b';
+  const source = item.source_case || displayModuleName(item.module) || '\u672a\u547d\u540d\u7528\u4f8b';
   return displayText(source)
     .replace(/^MT-[A-Z0-9-]+\s*[·:：-]\s*/i, '')
     .trim();
@@ -1452,7 +1453,7 @@ function syntheticRunResult(data) {
     cases: [{
       id: data.id || 'RUN',
       module: '\u8fd0\u884c\u5f02\u5e38',
-      source_l2_case: 'runner \u672a\u751f\u6210\u62a5\u544a',
+      source_case: 'runner \u672a\u751f\u6210\u62a5\u544a',
       objective: '\u540e\u53f0\u4efb\u52a1\u5df2\u7ed3\u675f\uff0c\u4f46\u6ca1\u6709\u8fd4\u56de\u53ef\u5c55\u793a\u7684\u7528\u4f8b\u7ed3\u679c\u3002',
       steps: [{
         name: data.status || '\u672a\u77e5\u72b6\u6001',
@@ -1547,7 +1548,7 @@ async function retryFailedStep(runId, caseId, stepIndex) {
     setEvidenceText(`\u6b63\u5728\u91cd\u8bd5\u5931\u8d25\u6b65\u9aa4\uff1a${stepName}\n\u5f53\u524d\u64cd\u4f5c\uff1a\u91cd\u65b0\u6253\u5f00\u4e32\u53e3\u5e76\u6267\u884c\u8bfb\u53d6\u547d\u4ee4`);
     const data = await api('/api/run-step', {
       method: 'POST',
-      body: JSON.stringify({ runId, caseId, caseTitle: item.source_l2_case || item.module || caseId, step, timeout: Number($('timeout')?.value || 30) }),
+      body: JSON.stringify({ runId, caseId, caseTitle: item.source_case || item.module || caseId, step, timeout: Number($('timeout')?.value || 30) }),
     });
     const retryRun = {
       id: data.id || `step-${Date.now()}`,
@@ -3782,7 +3783,7 @@ async function downloadReport(name) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     setEvidenceText(`\u62a5\u544a\u5df2\u4e0b\u8f7d: ${name}`);
   } catch (error) {
-    setEvidenceText(`\u62a5\u544a\u4e0b\u8f7d\u5931\u8d25: ${error.message}\n\u672c\u5730\u76ee\u5f55: E:\\Brower-Download\\seeed\\Project_01_WioTrackerL2\\logs`);
+    setEvidenceText(`\u62a5\u544a\u4e0b\u8f7d\u5931\u8d25: ${error.message}\n\u8bf7\u68c0\u67e5\u6d4f\u89c8\u5668\u4e0b\u8f7d\u6743\u9650\uff0c\u6216\u5728\u62a5\u544a\u9875\u91cd\u65b0\u4e0b\u8f7d\u3002`);
   }
 }
 
@@ -4444,7 +4445,7 @@ function renderBleTestItems() {
   }
   list.classList.remove('empty');
   list.innerHTML = items.map((item) => {
-    const label = item.display_name || item.source_l2_case || item.id;
+    const label = item.display_name || item.source_case || item.id;
     const tip = buildCaseTip(item);
     // 用例覆盖哪些具体项要能直接看到：时区用例就是 7 个具体时区（US/Hawaii …），
     // 不能只写「7 个 US/* 别名」而不列出是哪 7 个。
@@ -4979,7 +4980,7 @@ async function runWebBleConfigWrite(payload, label) {
       cases: [{
         id: 'MT-CUSTOM-CONFIG',
         module: '\u914d\u7f6e\u5199\u5165',
-        source_l2_case: 'BLE \u914d\u7f6e\u4e0b\u53d1\u4e0e\u8bfb\u56de\u6821\u9a8c',
+        source_case: 'BLE \u914d\u7f6e\u4e0b\u53d1\u4e0e\u8bfb\u56de\u6821\u9a8c',
         objective: '\u901a\u8fc7 Web Bluetooth ADMIN_APP \u5199\u5165 Meshtastic \u914d\u7f6e\u5e76\u6838\u5bf9\u8bfb\u56de\u503c\u3002',
         transport: 'web_bluetooth',
         steps,
@@ -5389,6 +5390,13 @@ async function runCommunication() {
 function renderModules() {
   const grid = $('moduleGrid');
   grid.innerHTML = '';
+  if (!Object.keys(state.modules || {}).length) {
+    const empty = document.createElement('div');
+    empty.className = 'module-row';
+    empty.textContent = state.caseCatalogNotice || '当前未加载测试项。可使用配置写入、通信验证和联系人互识功能，或配置团队本地用例库。';
+    grid.appendChild(empty);
+    return;
+  }
   for (const [moduleName, cases] of Object.entries(state.modules)) {
     if (moduleName === 'Precheck' || moduleName === '\u6d4b\u8bd5\u524d\u68c0\u67e5') continue;
     if (moduleName === '\u53ef\u9009\u53d6\u8bc1' || moduleName === 'Optional reads') continue;
@@ -5401,7 +5409,7 @@ function renderModules() {
     const note = '';
     const caseList = visibleCases.map((caseItem) => {
       // 子项只显示「角色标识 + 核心释义」，用例 ID 与来源放进 hover 提示，避免每行都是重复前缀。
-      const label = caseItem.display_name || caseItem.source_l2_case || caseItem.id;
+      const label = caseItem.display_name || caseItem.source_case || caseItem.id;
       const tip = buildCaseTip(caseItem);
       return `<div class="case-row" title="${escapeHtml(tip)}"><span>${escapeHtml(label)}</span><button class="case-icon-run" data-case="${escapeHtml(caseItem.id)}" title="\u8fd0\u884c\u5355\u6761" aria-label="\u8fd0\u884c\u5355\u6761"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></button></div>`;
     }).join('');
@@ -5687,6 +5695,7 @@ async function init() {
     const cases = await api('/api/cases');
     state.modules = cases.modules;
     state.cases = cases.cases;
+    state.caseCatalogNotice = cases.notice || '';
     if ($('caseCount')) $('caseCount').textContent = `${state.cases.length} 条用例`;
     renderModules();
     const reports = await api('/api/reports');

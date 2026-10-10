@@ -14,7 +14,8 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CASES = Path(__file__).with_name("cases_l2_demo.json")
+# Device-specific case catalogues are deliberately external to the public repo.
+DEFAULT_CASES = os.environ.get("MESHTASTIC_CASES_PATH", "")
 LOCAL_MESHTASTIC = PROJECT_ROOT / ".venv" / "Scripts" / "meshtastic.exe"
 LOCAL_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
 SAFE_MESHTASTIC_CLI = Path(__file__).with_name("safe_meshtastic_cli.py")
@@ -1671,7 +1672,7 @@ def adapt_case_for_connections(case, peer_connection_args, observer_connection_a
                 "带 requires_observer 的行为观测步骤已被跳过，PASS 只代表角色写入与读回通过，不代表角色行为已观测。"
             )
     if not peer_connection_args and adapted.get("id") == "MT-PRECHECK-PAIR":
-        adapted["source_l2_case"] = "单设备身份 / 通信关键配置 / 频道快照"
+        adapted["source_case"] = "单设备身份 / 通信关键配置 / 频道快照"
         adapted["objective"] = "连接一台设备时，只读取该设备的身份、通信关键配置和频道 0 快照；不执行测试设备2或双设备 NodeDB 检查。"
         adapted["test_data"] = "需要测试设备1连接；只连接一台设备时不要求测试设备2。"
         adapted["pass_meaning"] = "PASS 表示当前设备可被 CLI 控制，并已读取节点 ID、设备名、通信关键配置和频道快照；不代表双设备通信或点对点 ACK 已通过。"
@@ -1858,7 +1859,7 @@ def custom_config_case(args):
     return {
         "id": "MT-CUSTOM-CONFIG",
         "module": "\u914d\u7f6e\u5199\u5165",
-        "source_l2_case": "\u7528\u6237\u914d\u7f6e\u5199\u5165\u4e0e\u8bfb\u56de",
+        "source_case": "\u7528\u6237\u914d\u7f6e\u5199\u5165\u4e0e\u8bfb\u56de",
         "objective": "\u6309\u7528\u6237\u9009\u62e9\u7684\u914d\u7f6e\u9879\u4e0b\u53d1\u5230\u6307\u5b9a\u8bbe\u5907\uff0c\u5e76\u8bfb\u56de\u786e\u8ba4\u662f\u5426\u751f\u6548\u3002",
         "test_data": f"config={args.config_kind or args.config_field or '-'}, target={args.config_target}",
         "pass_meaning": "PASS \u8868\u793a\u914d\u7f6e\u5df2\u5199\u5165\u5e76\u8bfb\u56de\u4e00\u81f4\uff1b\u5982\u679c\u5f53\u524d\u503c\u5df2\u4e00\u81f4\uff0c\u4f1a\u8df3\u8fc7\u91cd\u590d\u5199\u5165\u3002",
@@ -1925,7 +1926,7 @@ def communication_config_case(args):
     return {
         "id": "MT-COMM-CONFIG",
         "module": "\u901a\u4fe1\u914d\u7f6e\u4e0b\u53d1",
-        "source_l2_case": "Modem Preset / Region / Frequency Override",
+        "source_case": "Modem Preset / Region / Frequency Override",
         "objective": "\u5c06\u4e24\u53f0\u8bbe\u5907\u7684\u901a\u4fe1\u5173\u952e\u914d\u7f6e\u8bbe\u4e3a\u4e00\u81f4\uff0c\u4e3a\u901a\u4fe1\u9a8c\u8bc1\u505a\u51c6\u5907\u3002",
         "test_data": f"lora.region={args.experiment_region or '-'}, lora.modem_preset={args.experiment_modem or '-'}, lora.override_frequency={args.override_frequency or '-'}",
         "pass_meaning": "PASS \u8868\u793a\u9700\u8981\u4fee\u6539\u7684\u914d\u7f6e\u5df2\u5199\u5165\u5e76\u8bfb\u56de\u4e00\u81f4\u3002",
@@ -1966,7 +1967,7 @@ def communication_check_case(args):
     return {
         "id": "MT-COMM-CHECK",
         "module": "\u901a\u4fe1\u914d\u7f6e\u68c0\u67e5",
-        "source_l2_case": "\u901a\u4fe1\u524d\u7f6e\u914d\u7f6e\u68c0\u67e5",
+        "source_case": "\u901a\u4fe1\u524d\u7f6e\u914d\u7f6e\u68c0\u67e5",
         "objective": "\u5728\u4e0d\u4e0b\u53d1\u914d\u7f6e\u65f6\uff0c\u5148\u68c0\u67e5\u4e24\u53f0\u8bbe\u5907\u7684\u901a\u4fe1\u5173\u952e\u914d\u7f6e\u662f\u5426\u4e00\u81f4\u3002",
         "test_data": "Region / Modem Preset / Frequency Override",
         "pass_meaning": "PASS \u8868\u793a\u4e24\u53f0\u8bbe\u5907\u7684\u901a\u4fe1\u5173\u952e\u914d\u7f6e\u4e00\u81f4\u3002",
@@ -2091,7 +2092,7 @@ def contact_exchange_case(args):
     return {
         "id": "MESHTASTIC-CONTACT-EXCHANGE",
         "module": "\u8054\u7cfb\u4eba\u4e92\u8ba4",
-        "source_l2_case": "\u964c\u751f\u8bbe\u5907\u516c\u94a5\u4ea4\u6362",
+        "source_case": "\u964c\u751f\u8bbe\u5907\u516c\u94a5\u4ea4\u6362",
         "objective": "\u901a\u8fc7 Meshtastic \u8054\u7cfb\u4eba URL \u5728\u4e24\u53f0\u8bbe\u5907\u95f4\u5bfc\u5165\u5bf9\u65b9\u516c\u94a5\uff0c\u4e3a\u70b9\u5bf9\u70b9\u6d88\u606f\u505a\u51c6\u5907\u3002",
         "test_data": "contact-qr / add-contact / NodeDB",
         "pass_meaning": "PASS \u8868\u793a\u4e24\u53f0\u8bbe\u5907\u90fd\u5df2\u5bfc\u5165\u5bf9\u65b9\u8054\u7cfb\u4eba URL\uff0c\u4e14 NodeDB \u4e2d\u80fd\u770b\u5230\u5bf9\u65b9\u8282\u70b9\u3002\u8fd9\u4e0d\u7b49\u4e8e\u6d88\u606f\u5df2 ACK\uff0c\u901a\u4fe1\u4ecd\u9700\u5355\u72ec\u9a8c\u8bc1\u3002",
@@ -2563,7 +2564,7 @@ def communication_experiment_case(args):
     return {
         "id": "MT-COMM-EXPERIMENT",
         "module": "\u901a\u4fe1\u9a8c\u8bc1",
-        "source_l2_case": "\u9891\u9053\u901a\u4fe1" if message_mode == "channel" else "\u70b9\u5bf9\u70b9\u53cc\u5411\u901a\u4fe1",
+        "source_case": "\u9891\u9053\u901a\u4fe1" if message_mode == "channel" else "\u70b9\u5bf9\u70b9\u53cc\u5411\u901a\u4fe1",
         "objective": "\u5728\u4e24\u53f0\u8bbe\u5907\u901a\u4fe1\u914d\u7f6e\u4e00\u81f4\u7684\u524d\u63d0\u4e0b\uff0c\u9a8c\u8bc1\u9891\u9053\u53d1\u9001\u6216\u70b9\u5bf9\u70b9\u53cc\u5411\u6d88\u606f\u662f\u5426\u771f\u6b63\u88ab\u5bf9\u7aef\u6536\u5230\u3002",
         "test_data": f"message_mode={message_mode}; channel={message_channel}; primary_message={primary_message or 'empty'}; peer_message={peer_message or 'empty'}",
         "pass_meaning": "\u901a\u4fe1\u7528\u4f8b\u5df2\u6309\u5f53\u524d\u53d1\u9001\u65b9\u5f0f\u5b8c\u6210\u3002\u9891\u9053\u6a21\u5f0f\u4e0d\u5360\u7528\u63a5\u6536\u7aef\u4e32\u53e3\uff0c\u53ea\u786e\u8ba4\u53d1\u9001\u547d\u4ee4\u5df2\u4e0b\u53d1\u5230\u5bf9\u5e94\u9891\u9053\uff0c\u8bbe\u5907\u5c4f\u5e55/\u804a\u5929\u6846\u662f\u5b9e\u673a\u89c2\u5bdf\u70b9\u3002\u70b9\u5bf9\u70b9\u6a21\u5f0f\u8981\u6c42\u5bf9\u7aef ACK\uff0c\u5e76\u91ca\u653e\u63a5\u6536\u7aef\u4e32\u53e3\u4ee5\u4fdd\u7559\u8bbe\u5907 UI \u6d88\u606f\u663e\u793a\u3002",
@@ -2576,7 +2577,7 @@ def run_case(case, args, connection_args, peer_connection_args, context, progres
     case_result = {
         "id": case.get("id"),
         "module": case.get("module"),
-        "source_l2_case": case.get("source_l2_case"),
+        "source_case": case.get("source_case"),
         "objective": case.get("objective"),
         "test_data": case.get("test_data"),
         "pass_meaning": case.get("pass_meaning"),
@@ -3145,7 +3146,7 @@ def main():
     # 载入历史记录：某串口一旦确认「必须断言 DTR」，后续每轮都不再白等一次必然失败的尝试。
     DTR_ASSERT_PORTS.update(load_dtr_ports())
     parser = argparse.ArgumentParser(description="Meshtastic firmware regression test executor")
-    parser.add_argument("--cases", default=str(DEFAULT_CASES), help="JSON testcase file")
+    parser.add_argument("--cases", default=DEFAULT_CASES, help="optional JSON testcase file; defaults to MESHTASTIC_CASES_PATH")
     parser.add_argument("--meshtastic", default=default_meshtastic_command(), help="meshtastic CLI executable")
     parser.add_argument("--port", help="test device 1 serial port, for example COM31")
     parser.add_argument("--host", help="test device 1 TCP host, for example meshtastic.local")
@@ -3196,7 +3197,9 @@ def main():
     parser.add_argument("--out", help="JSON report output path; default is project logs")
     args = parser.parse_args()
 
-    data = json.loads(Path(args.cases).read_text(encoding="utf-8"))
+    data = {"suite": "Meshtastic firmware test console", "cases": []}
+    if args.cases:
+        data = json.loads(Path(args.cases).read_text(encoding="utf-8"))
     connection_args = build_connection_args(args)
     peer_connection_args = build_peer_connection_args(args)
     observer_connection_args = build_observer_connection_args(args)
@@ -3211,6 +3214,8 @@ def main():
     elif args.custom_only:
         cases = [custom_config_case(args)]
     else:
+        if not data.get("cases"):
+            parser.error("未配置测试项。请通过 --cases 或 MESHTASTIC_CASES_PATH 指定团队本地用例库，或使用 --custom-only / --experiment-only 等平台操作。")
         cases = list(selected_cases(data, args.case_filter))
     cases = expand_regression_cases(cases)
     cases = adapt_cases_for_connections(cases, peer_connection_args, observer_connection_args)
